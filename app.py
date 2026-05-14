@@ -1,6 +1,5 @@
 import html
 import warnings
-from datetime import datetime
 from pathlib import Path
 
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
@@ -35,14 +34,18 @@ if st.sidebar.button("🔄 刷新最新数据！"):
 
 
 @st.cache_data(show_spinner=True)
-def load_result_csv(path_str: str) -> pd.DataFrame:
+def load_result_csv(path_str: str, _mtime: float) -> pd.DataFrame:
+    """_mtime 参与缓存键：result.csv 变更后自动重新读取。"""
     path = Path(path_str)
     if not path.is_file():
         return pd.DataFrame()
     df = pd.read_csv(path, encoding="utf-8-sig")
     df.columns = [str(c).strip() for c in df.columns]
+    if "日期" not in df.columns:
+        df["日期"] = ""
     if "子平台" not in df.columns:
         df["子平台"] = ""
+    df["日期"] = df["日期"].fillna("").astype(str).str.strip()
     df["子平台"] = df["子平台"].fillna("").astype(str).str.strip()
     df["部门"] = df["部门"].fillna("").astype(str).str.strip()
     df["平台"] = df["平台"].fillna("").astype(str).str.strip()
@@ -50,7 +53,27 @@ def load_result_csv(path_str: str) -> pd.DataFrame:
     return df
 
 
-df_all = load_result_csv(str(RESULT_CSV))
+def max_business_date_label(df: pd.DataFrame) -> str:
+    """取「日期」列中可解析的最大日期，格式 YYYY-MM-DD；无有效值时返回 —。"""
+    if df.empty or "日期" not in df.columns:
+        return "—"
+    s = df["日期"].astype(str).str.strip()
+    s = s[s.ne("") & s.str.lower().ne("nan")]
+    if s.empty:
+        return "—"
+    parsed = pd.to_datetime(s, errors="coerce")
+    tmax = parsed.max()
+    if pd.isna(tmax):
+        return "—"
+    return tmax.strftime("%Y-%m-%d")
+
+
+try:
+    _result_mtime = RESULT_CSV.stat().st_mtime
+except OSError:
+    _result_mtime = 0.0
+
+df_all = load_result_csv(str(RESULT_CSV), _result_mtime)
 
 if df_all.empty:
     st.error(f"❌ 未读取到数据。尝试路径：`{RESULT_CSV}`（文件不存在或无法解析）。")
@@ -63,6 +86,13 @@ if df_all.empty:
 # 侧边栏筛选
 # --------------------------
 st.sidebar.header("🔍 筛选条件")
+
+date_list = sorted([d for d in df_all["日期"].unique() if d])
+date_options = ["全部"] + date_list
+if "selected_date_radio" not in st.session_state:
+    st.session_state["selected_date_radio"] = "全部"
+selected_date_radio = st.sidebar.radio("日期", date_options, key="selected_date_radio")
+selected_dates = date_list if selected_date_radio == "全部" else [selected_date_radio]
 
 dept_list = sorted([d for d in df_all["部门"].unique() if d])
 dept_options = ["全部"] + dept_list
@@ -81,6 +111,8 @@ selected_plat = plat_list if selected_plat_radio == "全部" else [selected_plat
 
 def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
+    if selected_dates:
+        out = out[out["日期"].isin(selected_dates)]
     if selected_dept:
         out = out[out["部门"].isin(selected_dept)]
     if selected_plat:
@@ -162,14 +194,11 @@ df_filtered = apply_filters(df_all)
 # --------------------------
 # 主界面
 # --------------------------
-try:
-    mtime = datetime.fromtimestamp(RESULT_CSV.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-except OSError:
-    mtime = "未知"
+last_date_display = max_business_date_label(df_all)
 
 st.markdown(
     f"<h1>📊 数据看板 <span style='font-size: 16px; color: #666; font-weight: normal;'>"
-    f"数据源: result.csv · 文件更新时间: {mtime}</span></h1>",
+    f"数据源: result.csv · 数据最后日期: {last_date_display}</span></h1>",
     unsafe_allow_html=True,
 )
 st.markdown("---")
