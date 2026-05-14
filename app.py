@@ -225,6 +225,37 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# 按「日期」汇总成交金额趋势（与当前侧边栏筛选一致）
+_trend = df_filtered.assign(
+    _日期解析=pd.to_datetime(
+        df_filtered["日期"].astype(str).str.strip(),
+        errors="coerce",
+    )
+).dropna(subset=["_日期解析"])
+if not _trend.empty:
+    trend_src = _trend.sort_values("_日期解析").copy()
+    st.subheader("📊 成交金额按日期趋势")
+    fig_trend = px.bar(
+        trend_src,
+        x="_日期解析",
+        y="成交金额",
+        title="",
+    )
+    fig_trend.update_layout(
+        xaxis_title="日期时间",
+        yaxis_title="成交金额（元）",
+        height=400,
+        margin=dict(l=10, r=10, t=10, b=10),
+        showlegend=False,
+    )
+    fig_trend.update_xaxes(tickformat="%Y-%m-%d %H:%M", hoverformat="%Y-%m-%d %H:%M:%S")
+    fig_trend.update_traces(
+        hovertemplate="%{x|%Y-%m-%d %H:%M:%S}<br>成交金额: %{y:,.2f} 元<extra></extra>"
+    )
+    st.plotly_chart(fig_trend, use_container_width=True)
+else:
+    st.info("当前筛选下无有效「日期」数据，无法绘制成交金额趋势图。")
+
 st.markdown("---")
 
 # 汇总透视：部门 × 平台
@@ -247,7 +278,7 @@ st.markdown("---")
 st.subheader("📋 明细数据")
 display_df = df_filtered.copy()
 display_df["成交金额(万元)"] = (display_df["成交金额"] / 10000.0).round(2)
-detail_cols = ["部门", "平台", "子平台", "成交金额(万元)"]
+detail_cols = ["日期", "部门", "平台", "子平台", "成交金额(万元)"]
 st.markdown(
     render_detail_table_vertical_merge(display_df, detail_cols),
     unsafe_allow_html=True,
