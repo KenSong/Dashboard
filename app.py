@@ -9,18 +9,21 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-# 成交金额汇总表（由 extract_log_to_result_csv.py 生成）
-RESULT_CSV = Path(r"C:\Users\bjuser\Desktop\Python\result.csv")
-
-# --------------------------
-# 页面配置
-# --------------------------
+# Streamlit 要求尽早调用 set_page_config
 st.set_page_config(
     page_title="数据看板",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+def _result_csv_path() -> Path:
+    """与 app.py 同目录下的 result.csv（相对脚本所在文件夹，不依赖当前工作目录）。"""
+    return Path(__file__).resolve().parent / "result.csv"
+
+
+RESULT_CSV = _result_csv_path()
 
 # --------------------------
 # 侧边栏：刷新数据
@@ -50,7 +53,10 @@ def load_result_csv(path_str: str) -> pd.DataFrame:
 df_all = load_result_csv(str(RESULT_CSV))
 
 if df_all.empty:
-    st.error(f"❌ 未读取到数据，请确认文件存在：{RESULT_CSV}")
+    st.error(f"❌ 未读取到数据。尝试路径：`{RESULT_CSV}`（文件不存在或无法解析）。")
+    st.markdown(
+        "请将 `result.csv` 与 `app.py` 放在同一目录下（本地或 **Streamlit Community Cloud** 仓库中路径一致即可）。"
+    )
     st.stop()
 
 # --------------------------
