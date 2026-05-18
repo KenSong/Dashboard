@@ -87,12 +87,41 @@ if df_all.empty:
 # --------------------------
 st.sidebar.header("🔍 筛选条件")
 
+# 日期范围选择
 date_list = sorted([d for d in df_all["日期"].unique() if d])
-date_options = ["全部"] + date_list
-if "selected_date_radio" not in st.session_state:
-    st.session_state["selected_date_radio"] = "全部"
-selected_date_radio = st.sidebar.radio("日期", date_options, key="selected_date_radio")
-selected_dates = date_list if selected_date_radio == "全部" else [selected_date_radio]
+if date_list:
+    # 将日期字符串转换为 datetime 对象以便选择
+    date_objects = pd.to_datetime(date_list, errors="coerce")
+    valid_dates = [(d_str, d_obj) for d_str, d_obj in zip(date_list, date_objects) if pd.notna(d_obj)]
+    valid_dates.sort(key=lambda x: x[1])
+    
+    if valid_dates:
+        min_date = valid_dates[0][1].date()
+        max_date = valid_dates[-1][1].date()
+        
+        # 使用日期范围选择器
+        date_range = st.sidebar.date_input(
+            "日期范围",
+            value=(min_date, max_date),
+            min_value=min_date,
+            max_value=max_date,
+            format="YYYY-MM-DD"
+        )
+        
+        # 处理日期范围选择
+        if isinstance(date_range, tuple) and len(date_range) == 2:
+            start_date, end_date = date_range
+            # 筛选在日期范围内的数据
+            selected_dates = [
+                d_str for d_str, d_obj in valid_dates
+                if start_date <= d_obj.date() <= end_date
+            ]
+        else:
+            selected_dates = date_list
+    else:
+        selected_dates = date_list
+else:
+    selected_dates = []
 
 dept_list = sorted([d for d in df_all["部门"].unique() if d])
 dept_options = ["全部"] + dept_list
@@ -233,10 +262,12 @@ _trend = df_filtered.assign(
     )
 ).dropna(subset=["_日期解析"])
 if not _trend.empty:
-    trend_src = _trend.sort_values("_日期解析").copy()
+    # 按日期汇总总金额
+    trend_sum = _trend.groupby("_日期解析", as_index=False)["成交金额"].sum()
+    
     st.subheader("📊 成交金额按日期趋势")
     fig_trend = px.bar(
-        trend_src,
+        trend_sum,
         x="_日期解析",
         y="成交金额",
         title="",
@@ -250,7 +281,9 @@ if not _trend.empty:
     )
     fig_trend.update_xaxes(tickformat="%Y-%m-%d %H:%M", hoverformat="%Y-%m-%d %H:%M:%S")
     fig_trend.update_traces(
-        hovertemplate="%{x|%Y-%m-%d %H:%M:%S}<br>成交金额: %{y:,.2f} 元<extra></extra>"
+        texttemplate="%{y:,.2f} 元",
+        textposition="outside",
+        hovertemplate="%{x|%Y-%m-%d %H:%M:%S}<br>成交金额：%{y:,.2f} 元<extra></extra>"
     )
     st.plotly_chart(fig_trend, use_container_width=True)
 else:
