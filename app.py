@@ -305,6 +305,8 @@ pivot = (
 )
 if not pivot.empty:
     pivot = pivot.assign(合计=pivot.sum(axis=1))
+    date_days = (end_date - start_date).days + 1
+    pivot = pivot.assign(日均=pivot["合计"] / date_days)
 st.dataframe(pivot.style.format("{:,.2f}"), use_container_width=True)
 
 st.markdown("---")
