@@ -150,23 +150,53 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def render_detail_table_vertical_merge(df: pd.DataFrame, columns: list) -> str:
-    """HTML 表格：各列内连续相同取值合并为 rowspan（纵向合并）。"""
+    """HTML 表格：按天为单位合并单元格（当天相同值才合并），成交金额不合并。"""
     if df.empty:
         return "<p>无明细数据</p>"
     view = df[columns].reset_index(drop=True)
     n = len(view)
+    
+    # 需要合并的列（按优先级顺序）
+    mergeable_cols = ["日期", "部门", "平台", "子平台"]
+    no_merge_col = "成交金额(万元)"
+    
+    # 每列的合并信息
     rowspan = {col: [0] * n for col in columns}
-    for col in columns:
-        i = 0
-        while i < n:
-            j = i + 1
-            v = view.iloc[i][col]
-            while j < n and view.iloc[j][col] == v:
-                j += 1
-            rowspan[col][i] = j - i
-            for k in range(i + 1, j):
-                rowspan[col][k] = 0
-            i = j
+    
+    # 按天合并：同一天内，相同值才合并
+    i = 0
+    while i < n:
+        # 获取当前行的日期，作为合并的边界
+        current_date = view.iloc[i]["日期"]
+        
+        # 同一天内的结束位置
+        day_end = i + 1
+        while day_end < n and view.iloc[day_end]["日期"] == current_date:
+            day_end += 1
+        
+        # 在同一天内处理合并
+        for col in mergeable_cols:
+            j = i
+            while j < day_end:
+                col_span = 1
+                v = view.iloc[j][col]
+                k = j + 1
+                # 只在同一天内检查相同值
+                while k < day_end and view.iloc[k][col] == v:
+                    col_span += 1
+                    k += 1
+                # 设置该列的合并跨度
+                rowspan[col][j] = col_span
+                for m in range(j + 1, j + col_span):
+                    rowspan[col][m] = 0
+                j = k
+        
+        # 成交金额列不合并，每行独立显示
+        for row_idx in range(i, day_end):
+            rowspan[no_merge_col][row_idx] = 1
+        
+        # 移动到下一天
+        i = day_end
 
     body_rows = []
     for i in range(n):
@@ -262,28 +292,39 @@ _trend = df_filtered.assign(
     )
 ).dropna(subset=["_日期解析"])
 if not _trend.empty:
-    # 按日期汇总总金额
-    trend_sum = _trend.groupby("_日期解析", as_index=False)["成交金额"].sum()
+    # 按日期汇总总金额（按天汇总）
+    trend_sum = _trend.copy()
+    trend_sum["_日期"] = trend_sum["_日期解析"].dt.date
+    trend_sum = trend_sum.groupby("_日期", as_index=False)["成交金额"].sum()
+    
+    # 生成连续的日期序列
+    min_date = trend_sum["_日期"].min()
+    max_date = trend_sum["_日期"].max()
+    all_dates = pd.date_range(start=min_date, end=max_date, freq='D')
+    all_dates_df = pd.DataFrame({"_日期": all_dates.date})
+    
+    # 合并数据，缺失日期的成交金额设为0
+    trend_sum_full = pd.merge(all_dates_df, trend_sum, on="_日期", how="left").fillna(0)
     
     st.subheader("📊 成交金额按日期趋势")
     fig_trend = px.bar(
-        trend_sum,
-        x="_日期解析",
+        trend_sum_full,
+        x="_日期",
         y="成交金额",
         title="",
     )
     fig_trend.update_layout(
-        xaxis_title="日期时间",
+        xaxis_title="日期",
         yaxis_title="成交金额（元）",
         height=400,
         margin=dict(l=10, r=10, t=10, b=10),
         showlegend=False,
     )
-    fig_trend.update_xaxes(tickformat="%Y-%m-%d %H:%M", hoverformat="%Y-%m-%d %H:%M:%S")
+    fig_trend.update_xaxes(tickformat="%m-%d", hoverformat="%Y-%m-%d", tickmode='linear')
     fig_trend.update_traces(
         texttemplate="%{y:,.2f} 元",
         textposition="outside",
-        hovertemplate="%{x|%Y-%m-%d %H:%M:%S}<br>成交金额：%{y:,.2f} 元<extra></extra>"
+        hovertemplate="%{x|%Y-%m-%d}<br>成交金额：%{y:,.2f} 元<extra></extra>"
     )
     st.plotly_chart(fig_trend, use_container_width=True)
 else:
@@ -305,13 +346,56 @@ pivot = (
 )
 if not pivot.empty:
     pivot = pivot.assign(合计=pivot.sum(axis=1))
-    date_days = (end_date - start_date).days + 1
-    pivot = pivot.assign(日均=pivot["合计"] / date_days)
+    # 计算日均，需要检查日期变量是否已定义
+    if 'start_date' in locals() and 'end_date' in locals():
+        date_days = (end_date - start_date).days + 1
+        pivot = pivot.assign(日均=pivot["合计"] / date_days)
+    else:
+        # 如果日期范围未定义，使用数据中的日期数量计算
+        date_count = len(df_filtered["日期"].unique())
+        if date_count > 0:
+            pivot = pivot.assign(日均=pivot["合计"] / date_count)
 st.dataframe(pivot.style.format("{:,.2f}"), use_container_width=True)
 
 st.markdown("---")
 st.subheader("📋 明细数据")
-display_df = df_filtered.copy()
+
+# 获取所有不重复的日期并转换为datetime对象
+all_dates = [d for d in df_filtered["日期"].unique() if d]
+if all_dates:
+    # 转换为datetime对象以便使用日历选择器
+    date_objects = pd.to_datetime(all_dates, errors="coerce")
+    valid_date_tuples = [(d_str, d_obj) for d_str, d_obj in zip(all_dates, date_objects) if pd.notna(d_obj)]
+    valid_date_tuples.sort(key=lambda x: x[1])
+    
+    if valid_date_tuples:
+        # 获取最早和最晚日期
+        min_date = valid_date_tuples[0][1].date()
+        max_date = valid_date_tuples[-1][1].date()
+        
+        # 使用日历选择器，默认选中最新日期
+        selected_date_obj = st.date_input(
+            "选择日期",
+            value=max_date,
+            min_value=min_date,
+            max_value=max_date,
+            key="detail_date_selector"
+        )
+        
+        # 将筛选数据和选择的日期都转换为datetime对象进行比较（兼容各种日期格式）
+        df_with_date = df_filtered.copy()
+        df_with_date["_日期解析"] = pd.to_datetime(df_filtered["日期"], errors="coerce")
+        selected_date_dt = pd.to_datetime(selected_date_obj)
+        
+        # 根据选择的日期筛选数据
+        display_df = df_with_date[df_with_date["_日期解析"].dt.date == selected_date_obj].copy()
+        # 删除临时列
+        display_df = display_df.drop("_日期解析", axis=1)
+    else:
+        display_df = df_filtered.copy()
+else:
+    display_df = df_filtered.copy()
+
 display_df["成交金额(万元)"] = (display_df["成交金额"] / 10000.0).round(2)
 detail_cols = ["日期", "部门", "平台", "子平台", "成交金额(万元)"]
 st.markdown(
