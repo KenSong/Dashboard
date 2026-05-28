@@ -262,15 +262,22 @@ st.markdown(
 )
 st.markdown("---")
 
-total_amount = df_filtered["成交金额"].sum() / 10000.0
+total_amount = df_filtered["成交金额"].sum()
+total_goal = df_filtered["目标金额"].sum()
+achievement_rate = (total_amount / total_goal * 100) if total_goal > 0 else 0
 
 metric_html = """
 <style>
+    .custom-metric-row {
+        display: flex;
+        gap: 16px;
+    }
     .custom-metric {
         background: white;
         border-radius: 8px;
         padding: 16px;
         box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        flex: 1;
     }
     .metric-label { font-size: 14px; color: #666; margin-bottom: 8px; }
     .metric-value { font-size: 24px; font-weight: bold; color: #333; }
@@ -279,12 +286,16 @@ metric_html = """
 st.markdown(metric_html, unsafe_allow_html=True)
 
 st.markdown(
+    f"<div class='custom-metric-row'>"
     f"<div class='custom-metric'><div class='metric-label'>💰 成交金额合计（万元）</div>"
-    f"<div class='metric-value'>{total_amount:,.2f}</div></div>",
+    f"<div class='metric-value'>{total_amount:,.2f}</div></div>"
+    f"<div class='custom-metric'><div class='metric-label'>🏆 618完成率</div>"
+    f"<div class='metric-value'>{achievement_rate:.2f}%</div></div>"
+    f"</div>",
     unsafe_allow_html=True,
 )
 
-# 按「日期」汇总成交金额趋势（与当前侧边栏筛选一致）
+# 按「日期」汇总成交金额和目标金额趋势（与当前侧边栏筛选一致）
 _trend = df_filtered.assign(
     _日期解析=pd.to_datetime(
         df_filtered["日期"].astype(str).str.strip(),
@@ -292,10 +303,13 @@ _trend = df_filtered.assign(
     )
 ).dropna(subset=["_日期解析"])
 if not _trend.empty:
-    # 按日期汇总总金额（按天汇总）
+    # 按日期汇总成交金额和目标金额（按天汇总）
     trend_sum = _trend.copy()
     trend_sum["_日期"] = trend_sum["_日期解析"].dt.date
-    trend_sum = trend_sum.groupby("_日期", as_index=False)["成交金额"].sum()
+    trend_sum = trend_sum.groupby("_日期", as_index=False).agg(
+        成交金额=("成交金额", "sum"),
+        目标金额=("目标金额", "sum")
+    )
     
     # 生成连续的日期序列
     min_date = trend_sum["_日期"].min()
@@ -303,46 +317,56 @@ if not _trend.empty:
     all_dates = pd.date_range(start=min_date, end=max_date, freq='D')
     all_dates_df = pd.DataFrame({"_日期": all_dates.date})
     
-    # 合并数据，缺失日期的成交金额设为0
+    # 合并数据，缺失日期的金额设为0
     trend_sum_full = pd.merge(all_dates_df, trend_sum, on="_日期", how="left").fillna(0)
     
-    st.subheader("📊 成交金额按日期趋势")
+    st.subheader("📊 成交金额与目标金额趋势")
     fig_trend = px.bar(
         trend_sum_full,
         x="_日期",
         y="成交金额",
         title="",
+        labels={'成交金额': '成交金额'},
     )
+    
+    # 添加目标金额折线图
+    fig_trend.add_scatter(
+        x=trend_sum_full["_日期"],
+        y=trend_sum_full["目标金额"],
+        mode='lines+markers',
+        name='目标金额',
+        line=dict(width=3, color='red'),
+        marker=dict(size=8)
+    )
+    
     fig_trend.update_layout(
         xaxis_title="日期",
-        yaxis_title="成交金额（元）",
+        yaxis_title="金额（万元）",
         height=400,
         margin=dict(l=10, r=10, t=10, b=10),
-        showlegend=False,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
     fig_trend.update_xaxes(tickformat="%m-%d", hoverformat="%Y-%m-%d", tickmode='linear')
     fig_trend.update_traces(
-        texttemplate="%{y:,.2f} 元",
+        texttemplate="%{y:,.2f}",
         textposition="outside",
-        hovertemplate="%{x|%Y-%m-%d}<br>成交金额：%{y:,.2f} 元<extra></extra>"
+        hovertemplate="%{x|%Y-%m-%d}<br>成交金额：%{y:,.2f} 万元<extra></extra>",
+        selector=dict(type='bar')
     )
     st.plotly_chart(fig_trend, use_container_width=True)
 else:
-    st.info("当前筛选下无有效「日期」数据，无法绘制成交金额趋势图。")
+    st.info("当前筛选下无有效「日期」数据，无法绘制趋势图。")
 
 st.markdown("---")
 
 # 汇总透视：部门 × 平台
 st.subheader("📋 部门 × 平台 汇总（万元）")
-pivot = (
-    df_filtered.pivot_table(
-        index="部门",
-        columns="平台",
-        values="成交金额",
-        aggfunc="sum",
-        fill_value=0.0,
-    )
-    / 10000.0
+pivot = df_filtered.pivot_table(
+    index="部门",
+    columns="平台",
+    values="成交金额",
+    aggfunc="sum",
+    fill_value=0.0,
 )
 if not pivot.empty:
     pivot = pivot.assign(合计=pivot.sum(axis=1))
@@ -396,7 +420,7 @@ if all_dates:
 else:
     display_df = df_filtered.copy()
 
-display_df["成交金额(万元)"] = (display_df["成交金额"] / 10000.0).round(2)
+display_df["成交金额(万元)"] = display_df["成交金额"].round(2)
 detail_cols = ["日期", "部门", "平台", "子平台", "成交金额(万元)"]
 st.markdown(
     render_detail_table_vertical_merge(display_df, detail_cols),
@@ -430,7 +454,7 @@ st.subheader("📊 成交金额（按部门堆叠 · 平台）")
 bar_src = (
     df_filtered.groupby(["部门", "平台"], as_index=False)["成交金额"]
     .sum()
-    .assign(成交金额万元=lambda d: d["成交金额"] / 10000.0)
+    .assign(成交金额万元=lambda d: d["成交金额"])
 )
 if not bar_src.empty:
     fig_bar = px.bar(
