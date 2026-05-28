@@ -336,7 +336,8 @@ if not _trend.empty:
         mode='lines+markers',
         name='目标金额',
         line=dict(width=3, color='red'),
-        marker=dict(size=8)
+        marker=dict(size=8),
+        hovertemplate="%{x|%Y-%m-%d}<br>目标金额：%{y:,.2f} 万元<extra></extra>"
     )
     
     fig_trend.update_layout(
