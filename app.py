@@ -306,7 +306,7 @@ st.markdown(metric_html, unsafe_allow_html=True)
 # 计算618完成百分比（成交总额合计/1.7亿）- 使用所有部门和平台的总额
 # total_amount_all 单位是万元，1.7亿 = 17000万元
 total_amount_all = df_all["成交金额"].sum()
-completion_percent = (total_amount_all / 17000) * 100
+completion_percent = (total_amount_all / 18900) * 100
 
 st.markdown(
     f"<div class='custom-metric-row'>"
