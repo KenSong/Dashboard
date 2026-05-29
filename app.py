@@ -130,7 +130,17 @@ if "selected_dept_radio" not in st.session_state:
 selected_dept_radio = st.sidebar.radio("部门", dept_options, key="selected_dept_radio")
 selected_dept = dept_list if selected_dept_radio == "全部" else [selected_dept_radio]
 
-plat_list = sorted([p for p in df_all["平台"].unique() if p])
+plat_list = [p for p in df_all["平台"].unique() if p]
+
+# 自定义平台排序：将"小程序及其他"放在"新零售"之后
+def plat_sort_key(plat):
+    # 定义期望的顺序
+    order = ["京东", "天猫", "拼多多", "抖音", "新零售", "小程序及其他"]
+    if plat in order:
+        return order.index(plat)
+    return len(order) + ord(plat[0])
+
+plat_list = sorted(plat_list, key=plat_sort_key)
 plat_options = ["全部"] + plat_list
 if "selected_plat_radio" not in st.session_state:
     st.session_state["selected_plat_radio"] = "全部"
@@ -256,8 +266,16 @@ df_filtered = apply_filters(df_all)
 last_date_display = max_business_date_label(df_all)
 
 st.markdown(
-    f"<h1>📊 数据看板 <span style='font-size: 16px; color: #666; font-weight: normal;'>"
-    f"数据源: result.csv · 数据最后日期: {last_date_display}</span></h1>",
+    f"<div style='display: flex; justify-content: space-between; align-items: flex-start;'>"
+    f"<h1>📊 数据看板</h1>"
+    f"<div style='font-size: 13px; color: #666; text-align: right;'>"
+    f"<strong>数据源：</strong><br>"
+    f"<em>京东</em>，<em>天猫</em>，<em>拼多多</em>，<em>抖音</em> 来自平台<br>"
+    f"<em>新零售</em> 来自ERP里销售金额（低温*1.2，常温不变）<br>"
+    f"<em>多多买菜</em>和<em>小程序及其他</em> 来自常温<br>"
+    f"<strong>数据最后日期: {last_date_display}</strong>"
+    f"</div>"
+    f"</div>",
     unsafe_allow_html=True,
 )
 st.markdown("---")
@@ -285,12 +303,19 @@ metric_html = """
 """
 st.markdown(metric_html, unsafe_allow_html=True)
 
+# 计算618完成百分比（成交总额合计/1.7亿）- 使用所有部门和平台的总额
+# total_amount_all 单位是万元，1.7亿 = 17000万元
+total_amount_all = df_all["成交金额"].sum()
+completion_percent = (total_amount_all / 17000) * 100
+
 st.markdown(
     f"<div class='custom-metric-row'>"
     f"<div class='custom-metric'><div class='metric-label'>💰 成交金额合计（万元）</div>"
     f"<div class='metric-value'>{total_amount:,.2f}</div></div>"
-    f"<div class='custom-metric'><div class='metric-label'>🏆 618完成率</div>"
+    f"<div class='custom-metric'><div class='metric-label'>🏆 618当前达成率</div>"
     f"<div class='metric-value'>{achievement_rate:.2f}%</div></div>"
+    f"<div class='custom-metric'><div class='metric-label'>📈 618完成百分比</div>"
+    f"<div class='metric-value'>{completion_percent:.2f}%</div></div>"
     f"</div>",
     unsafe_allow_html=True,
 )
