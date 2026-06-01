@@ -50,6 +50,20 @@ def load_result_csv(path_str: str, _mtime: float) -> pd.DataFrame:
     df["部门"] = df["部门"].fillna("").astype(str).str.strip()
     df["平台"] = df["平台"].fillna("").astype(str).str.strip()
     df["成交金额"] = pd.to_numeric(df["成交金额"], errors="coerce").fillna(0.0)
+    # 确保目标金额列存在
+    if "目标金额" not in df.columns:
+        df["目标金额"] = 0.0
+    df["目标金额"] = pd.to_numeric(df["目标金额"], errors="coerce").fillna(0.0)
+    
+    # 按日期排序，确保同一日期的数据显示在一起
+    df["日期_sort"] = pd.to_datetime(df["日期"], errors="coerce")
+    
+    # 自定义平台排序：让小程序及其他在同一部门内排在最后
+    platform_order = {"京东": 1, "天猫": 2, "拼多多": 3, "抖音": 4, "新零售": 5, "多多买菜": 6, "小程序及其他": 99}
+    df["平台_sort"] = df["平台"].map(platform_order).fillna(100)
+    
+    df = df.sort_values(by=["日期_sort", "部门", "平台_sort"], na_position="last").drop(["日期_sort", "平台_sort"], axis=1)
+    
     return df
 
 
@@ -336,14 +350,8 @@ if not _trend.empty:
         目标金额=("目标金额", "sum")
     )
     
-    # 生成连续的日期序列
-    min_date = trend_sum["_日期"].min()
-    max_date = trend_sum["_日期"].max()
-    all_dates = pd.date_range(start=min_date, end=max_date, freq='D')
-    all_dates_df = pd.DataFrame({"_日期": all_dates.date})
-    
-    # 合并数据，缺失日期的金额设为0
-    trend_sum_full = pd.merge(all_dates_df, trend_sum, on="_日期", how="left").fillna(0)
+    # 只显示有数据的日期，不生成连续日期序列
+    trend_sum_full = trend_sum.sort_values("_日期")
     
     st.subheader("📊 成交金额与目标金额趋势")
     fig_trend = px.bar(
@@ -372,7 +380,13 @@ if not _trend.empty:
         margin=dict(l=10, r=10, t=10, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    fig_trend.update_xaxes(tickformat="%m-%d", hoverformat="%Y-%m-%d", tickmode='linear')
+    fig_trend.update_xaxes(
+        tickformat="%m-%d", 
+        hoverformat="%Y-%m-%d", 
+        tickmode='array',
+        tickvals=trend_sum_full["_日期"].tolist(),
+        ticktext=[d.strftime("%m-%d") for d in trend_sum_full["_日期"]]
+    )
     fig_trend.update_traces(
         texttemplate="%{y:,.2f}",
         textposition="outside",
