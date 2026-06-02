@@ -317,19 +317,57 @@ metric_html = """
 """
 st.markdown(metric_html, unsafe_allow_html=True)
 
-# 计算618完成百分比（成交总额合计/1.7亿）- 使用所有部门和平台的总额
-# total_amount_all 单位是万元，1.7亿 = 17000万元
-total_amount_all = df_all["成交金额"].sum()
-completion_percent = (total_amount_all / 18900) * 100
+# ========== 618目标金额配置（可独立删除）==========
+# 目标金额汇总数据（到6月20日）- 来自 目标金额汇总.csv
+# 格式: (部门, 平台): 目标金额(万元)
+target_amount_data = {
+    ("常温", "京东"): 5000.08,
+    ("常温", "天猫"): 1184.0,
+    ("常温", "抖音"): 1184.0,
+    ("常温", "拼多多"): 971.0,
+    ("常温", "新零售"): 1497.0,
+    ("常温", "小程序及其他"): 166.0,
+    ("低温", "京东"): 680.0,
+    ("低温", "天猫"): 160.0,
+    ("低温", "抖音"): 350.0,
+    ("低温", "拼多多"): 120.0,
+    ("低温", "新零售"): 2308.0,
+    ("奶粉", "京东"): 857.0,
+    ("奶粉", "天猫"): 69.0,
+    ("奶粉", "抖音"): 230.0,
+    ("奶粉", "拼多多"): 63.0,
+    ("八喜", "京东"): 2000.0,
+    ("八喜", "天猫"): 1229.0,
+    ("八喜", "抖音"): 870.0,
+    ("八喜", "拼多多"): 6.5,
+}
 
+# 根据筛选条件计算目标金额
+def get_filtered_target_amount(dept_list, plat_list):
+    total = 0.0
+    for (d, p), amount in target_amount_data.items():
+        # dept_list 和 plat_list 是列表类型
+        dept_match = d in dept_list
+        plat_match = p in plat_list
+        if dept_match and plat_match:
+            total += amount
+    return total
+
+# 计算618完成百分比
+target_amount_total = get_filtered_target_amount(selected_dept, selected_plat)
+if target_amount_total > 0:
+    completion_percent = (total_amount / target_amount_total) * 100
+else:
+    completion_percent = 0.0
+# ========== 618目标金额配置结束 ==========
+
+# 第一行指标
 st.markdown(
     f"<div class='custom-metric-row'>"
     f"<div class='custom-metric'><div class='metric-label'>💰 成交金额合计（万元）</div>"
     f"<div class='metric-value'>{total_amount:,.2f}</div></div>"
     f"<div class='custom-metric'><div class='metric-label'>🏆 618当前达成率</div>"
-    f"<div class='metric-value'>{achievement_rate:.2f}%</div></div>"
-    f"<div class='custom-metric'><div class='metric-label'>📈 618完成百分比</div>"
-    f"<div class='metric-value'>{completion_percent:.2f}%</div></div>"
+    f"<div class='metric-value'>{achievement_rate:.2f}% ({total_goal:,.2f}万)</div></div>"
     f"</div>",
     unsafe_allow_html=True,
 )
@@ -352,6 +390,40 @@ if not _trend.empty:
     
     # 只显示有数据的日期，不生成连续日期序列
     trend_sum_full = trend_sum.sort_values("_日期")
+    
+    # ========== 618时间进度计算（使用原始数据最后日期，不受筛选影响）==========
+    import datetime
+    start_date = datetime.date(2026, 5, 13)
+    end_date = datetime.date(2026, 6, 20)
+    total_days = (end_date - start_date).days + 1
+    
+    # 使用原始数据 df_all 的最后日期
+    df_all_dates = pd.to_datetime(df_all["日期"].astype(str).str.strip(), errors="coerce").dropna()
+    if not df_all_dates.empty:
+        latest_date = df_all_dates.max()
+        if hasattr(latest_date, 'date'):
+            latest_date = latest_date.date()
+        days_passed = (latest_date - start_date).days + 1
+        if days_passed < 0:
+            days_passed = 0
+        elif days_passed > total_days:
+            days_passed = total_days
+        time_progress = (days_passed / total_days) * 100
+    else:
+        days_passed = 0
+        time_progress = 0.0
+    # ========== 618时间进度计算结束 ==========
+    
+    # 第二行指标
+    st.markdown(
+        f"<div class='custom-metric-row'>"
+        f"<div class='custom-metric'><div class='metric-label'>📈 618完成百分比</div>"
+        f"<div class='metric-value'>{completion_percent:.2f}% ({target_amount_total:,.2f}万)</div></div>"
+        f"<div class='custom-metric'><div class='metric-label'>⏱️ 618时间进度</div>"
+        f"<div class='metric-value'>{time_progress:.2f}% ({days_passed}/{total_days}天)</div></div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
     
     st.subheader("📊 成交金额与目标金额趋势")
     fig_trend = px.bar(
