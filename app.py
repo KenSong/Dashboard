@@ -113,14 +113,65 @@ if date_list:
         min_date = valid_dates[0][1].date()
         max_date = valid_dates[-1][1].date()
         
-        # 使用日期范围选择器
+        # 618日期范围
+        start_date_618 = pd.to_datetime("2026-05-13").date()
+        end_date_618 = pd.to_datetime("2026-06-20").date()
+        
+        # 添加618数据按钮
+        if st.sidebar.button("618数据"):
+            # 设置日期范围和618模式标志，同时标记为用户手动选择
+            st.session_state["date_range_selector"] = (start_date_618, end_date_618)
+            st.session_state["is_618_mode"] = True
+            st.session_state["user_manually_selected_date"] = True
+            st.rerun()
+        
+        # 初始化用户是否手动选择日期范围的标志
+        if "user_manually_selected_date" not in st.session_state:
+            st.session_state["user_manually_selected_date"] = False
+        
+        # 计算默认日期范围：最近10天（每次都重新计算，确保数据更新后能显示最新日期）
+        if len(valid_dates) > 10:
+            default_start_date = valid_dates[-10][1].date()
+            default_end_date = valid_dates[-1][1].date()
+        else:
+            default_start_date = min_date
+            default_end_date = max_date
+        
+        # 初始化日期范围选择器的默认值（只在第一次加载时设置）
+        if "date_range_selector" not in st.session_state:
+            st.session_state["date_range_selector"] = (default_start_date, default_end_date)
+        
+        # 使用日期范围选择器，使用key来管理状态
         date_range = st.sidebar.date_input(
             "日期范围",
-            value=(min_date, max_date),
+            value=st.session_state["date_range_selector"],
             min_value=min_date,
             max_value=max_date,
-            format="YYYY-MM-DD"
+            format="YYYY-MM-DD",
+            key="date_range_selector"
         )
+        
+        # 保存原始的日期范围值
+        original_date_range = date_range
+        
+        # 检测日期范围是否有效
+        if not isinstance(date_range, tuple) or len(date_range) != 2:
+            # 用户可能正在选择日期，暂时使用默认日期范围，不显示警告
+            date_range = (default_start_date, default_end_date)
+        
+        # 检测用户是否手动修改了日期范围（使用原始值进行比较）
+        if isinstance(original_date_range, tuple) and len(original_date_range) == 2:
+            if original_date_range != (default_start_date, default_end_date):
+                st.session_state["user_manually_selected_date"] = True
+            else:
+                st.session_state["user_manually_selected_date"] = False
+        
+        # 检查是否在618模式
+        is_618_mode = st.session_state.get("is_618_mode", False)
+        # 如果日期范围不是618日期范围，退出618模式
+        if date_range != (start_date_618, end_date_618):
+            st.session_state["is_618_mode"] = False
+            is_618_mode = False
         
         # 处理日期范围选择
         if isinstance(date_range, tuple) and len(date_range) == 2:
@@ -294,7 +345,33 @@ st.markdown(
 )
 st.markdown("---")
 
-total_amount = df_filtered["成交金额"].sum()
+# 计算成交金额合计
+is_618_mode = st.session_state.get("is_618_mode", False)
+user_manually_selected = st.session_state.get("user_manually_selected_date", False)
+
+if is_618_mode:
+    # 618模式，计算5/13-6/20范围内的成交金额
+    total_amount = df_filtered["成交金额"].sum()
+elif user_manually_selected:
+    # 非618模式，用户手动选择了日期范围，计算该范围内的成交金额
+    total_amount = df_filtered["成交金额"].sum()
+else:
+    # 非618模式，用户没有手动选择日期范围，计算最近10天的成交金额
+    df_dates = df_filtered.assign(
+        _日期解析=pd.to_datetime(df_filtered["日期"].astype(str).str.strip(), errors="coerce")
+    ).dropna(subset=["_日期解析"])
+    
+    if not df_dates.empty:
+        # 获取最近10天的日期
+        recent_dates = df_dates["_日期解析"].dt.date.unique()
+        if len(recent_dates) > 10:
+            recent_dates = sorted(recent_dates)[-10:]
+        # 筛选最近10天的数据
+        df_recent = df_dates[df_dates["_日期解析"].dt.date.isin(recent_dates)]
+        total_amount = df_recent["成交金额"].sum()
+    else:
+        total_amount = df_filtered["成交金额"].sum()
+
 total_goal = df_filtered["目标金额"].sum()
 achievement_rate = (total_amount / total_goal * 100) if total_goal > 0 else 0
 
@@ -317,57 +394,11 @@ metric_html = """
 """
 st.markdown(metric_html, unsafe_allow_html=True)
 
-# ========== 618目标金额配置（可独立删除）==========
-# 目标金额汇总数据（到6月20日）- 来自 目标金额汇总.csv
-# 格式: (部门, 平台): 目标金额(万元)
-target_amount_data = {
-    ("常温", "京东"): 5000.08,
-    ("常温", "天猫"): 1184.0,
-    ("常温", "抖音"): 1184.0,
-    ("常温", "拼多多"): 971.0,
-    ("常温", "新零售"): 1497.0,
-    ("常温", "小程序及其他"): 166.0,
-    ("低温", "京东"): 680.0,
-    ("低温", "天猫"): 160.0,
-    ("低温", "抖音"): 350.0,
-    ("低温", "拼多多"): 120.0,
-    ("低温", "新零售"): 2308.0,
-    ("奶粉", "京东"): 857.0,
-    ("奶粉", "天猫"): 69.0,
-    ("奶粉", "抖音"): 230.0,
-    ("奶粉", "拼多多"): 63.0,
-    ("八喜", "京东"): 2000.0,
-    ("八喜", "天猫"): 1229.0,
-    ("八喜", "抖音"): 870.0,
-    ("八喜", "拼多多"): 6.5,
-}
-
-# 根据筛选条件计算目标金额
-def get_filtered_target_amount(dept_list, plat_list):
-    total = 0.0
-    for (d, p), amount in target_amount_data.items():
-        # dept_list 和 plat_list 是列表类型
-        dept_match = d in dept_list
-        plat_match = p in plat_list
-        if dept_match and plat_match:
-            total += amount
-    return total
-
-# 计算618完成百分比
-target_amount_total = get_filtered_target_amount(selected_dept, selected_plat)
-if target_amount_total > 0:
-    completion_percent = (total_amount / target_amount_total) * 100
-else:
-    completion_percent = 0.0
-# ========== 618目标金额配置结束 ==========
-
 # 第一行指标
 st.markdown(
     f"<div class='custom-metric-row'>"
     f"<div class='custom-metric'><div class='metric-label'>💰 成交金额合计（万元）</div>"
     f"<div class='metric-value'>{total_amount:,.2f}</div></div>"
-    f"<div class='custom-metric'><div class='metric-label'>🏆 618当前达成率</div>"
-    f"<div class='metric-value'>{achievement_rate:.2f}% ({total_goal:,.2f}万)</div></div>"
     f"</div>",
     unsafe_allow_html=True,
 )
@@ -391,41 +422,20 @@ if not _trend.empty:
     # 只显示有数据的日期，不生成连续日期序列
     trend_sum_full = trend_sum.sort_values("_日期")
     
-    # ========== 618时间进度计算（使用原始数据最后日期，不受筛选影响）==========
-    import datetime
-    start_date = datetime.date(2026, 5, 13)
-    end_date = datetime.date(2026, 6, 20)
-    total_days = (end_date - start_date).days + 1
+    # 检查是否在618模式
+    is_618_mode = st.session_state.get("is_618_mode", False)
+    # 检查用户是否手动选择了日期范围
+    user_manually_selected = st.session_state.get("user_manually_selected_date", False)
     
-    # 使用原始数据 df_all 的最后日期
-    df_all_dates = pd.to_datetime(df_all["日期"].astype(str).str.strip(), errors="coerce").dropna()
-    if not df_all_dates.empty:
-        latest_date = df_all_dates.max()
-        if hasattr(latest_date, 'date'):
-            latest_date = latest_date.date()
-        days_passed = (latest_date - start_date).days + 1
-        if days_passed < 0:
-            days_passed = 0
-        elif days_passed > total_days:
-            days_passed = total_days
-        time_progress = (days_passed / total_days) * 100
+    # 非618模式下，如果用户没有手动选择日期范围，默认只显示最近10天的数据
+    if not is_618_mode and not user_manually_selected and len(trend_sum_full) > 10:
+        trend_sum_full = trend_sum_full.tail(10)
+    
+    if is_618_mode:
+        st.subheader("📊 成交金额与目标金额趋势")
     else:
-        days_passed = 0
-        time_progress = 0.0
-    # ========== 618时间进度计算结束 ==========
+        st.subheader("📊 成交金额趋势")
     
-    # 第二行指标
-    st.markdown(
-        f"<div class='custom-metric-row'>"
-        f"<div class='custom-metric'><div class='metric-label'>📈 618完成百分比</div>"
-        f"<div class='metric-value'>{completion_percent:.2f}% ({target_amount_total:,.2f}万)</div></div>"
-        f"<div class='custom-metric'><div class='metric-label'>⏱️ 618时间进度</div>"
-        f"<div class='metric-value'>{time_progress:.2f}% ({days_passed}/{total_days}天)</div></div>"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-    
-    st.subheader("📊 成交金额与目标金额趋势")
     fig_trend = px.bar(
         trend_sum_full,
         x="_日期",
@@ -434,16 +444,17 @@ if not _trend.empty:
         labels={'成交金额': '成交金额'},
     )
     
-    # 添加目标金额折线图
-    fig_trend.add_scatter(
-        x=trend_sum_full["_日期"],
-        y=trend_sum_full["目标金额"],
-        mode='lines+markers',
-        name='目标金额',
-        line=dict(width=3, color='red'),
-        marker=dict(size=8),
-        hovertemplate="%{x|%Y-%m-%d}<br>目标金额：%{y:,.2f} 万元<extra></extra>"
-    )
+    # 只有在618模式下才显示目标金额折线图
+    if is_618_mode:
+        fig_trend.add_scatter(
+            x=trend_sum_full["_日期"],
+            y=trend_sum_full["目标金额"],
+            mode='lines+markers',
+            name='目标金额',
+            line=dict(width=3, color='red'),
+            marker=dict(size=8),
+            hovertemplate="%{x|%Y-%m-%d}<br>目标金额：%{y:,.2f} 万元<extra></extra>"
+        )
     
     fig_trend.update_layout(
         xaxis_title="日期",
