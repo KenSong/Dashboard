@@ -1,4 +1,5 @@
 import html
+import urllib.parse
 import warnings
 from pathlib import Path
 
@@ -7,6 +8,21 @@ warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+
+# --------------------------
+# 报告页面单独处理
+# --------------------------
+report_param = st.query_params.get("report_path")
+if report_param:
+    decoded_path = urllib.parse.unquote(report_param)
+    if Path(decoded_path).exists():
+        with open(decoded_path, "r", encoding="utf-8") as f:
+            report_content = f.read()
+        st.set_page_config(page_title="618报告", page_icon="📊", layout="wide")
+        st.markdown(report_content, unsafe_allow_html=True)
+    else:
+        st.error("报告文件不存在")
+    st.stop()
 
 # Streamlit 要求尽早调用 set_page_config
 st.set_page_config(
@@ -117,13 +133,32 @@ if date_list:
         start_date_618 = pd.to_datetime("2026-05-13").date()
         end_date_618 = pd.to_datetime("2026-06-20").date()
         
-        # 添加618数据按钮
-        if st.sidebar.button("618数据"):
-            # 设置日期范围和618模式标志，同时标记为用户手动选择
+        # 添加618数据和618报告链接（并排显示）
+        col_btn1, col_btn2 = st.sidebar.columns(2)
+        with col_btn1:
+            st.markdown(f'<a href="/?show_618_data=true" target="_self">📊 618数据</a>', unsafe_allow_html=True)
+        with col_btn2:
+            report_url = str(Path(__file__).resolve().parent / "618完成百分比报告.md")
+            encoded_url = urllib.parse.quote(report_url)
+            st.markdown(f'<a href="/?report_path={encoded_url}" target="_blank">📄 618报告</a>', unsafe_allow_html=True)
+
+        # 处理618数据点击
+        if st.query_params.get("show_618_data") == "true":
             st.session_state["date_range_selector"] = (start_date_618, end_date_618)
             st.session_state["is_618_mode"] = True
             st.session_state["user_manually_selected_date"] = True
+            # 移除URL参数以避免重复执行
+            st.query_params.clear()
             st.rerun()
+
+        # 显示618报告内容（通过URL参数传递）
+        report_param = st.query_params.get("report_path")
+        if report_param:
+            decoded_path = urllib.parse.unquote(report_param)
+            if Path(decoded_path).exists():
+                with open(decoded_path, "r", encoding="utf-8") as f:
+                    report_content = f.read()
+                st.markdown(report_content, unsafe_allow_html=True)
         
         # 初始化用户是否手动选择日期范围的标志
         if "user_manually_selected_date" not in st.session_state:
