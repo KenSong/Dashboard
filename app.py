@@ -176,10 +176,8 @@ if date_list:
         if "date_range_selector" not in st.session_state:
             st.session_state["date_range_selector"] = (default_start_date, default_end_date)
         
-        # 使用日期范围选择器，使用key来管理状态
         date_range = st.sidebar.date_input(
             "日期范围",
-            value=st.session_state["date_range_selector"],
             min_value=min_date,
             max_value=max_date,
             format="YYYY-MM-DD",
@@ -511,7 +509,7 @@ if not _trend.empty:
         hovertemplate="%{x|%Y-%m-%d}<br>成交金额：%{y:,.2f} 万元<extra></extra>",
         selector=dict(type='bar')
     )
-    st.plotly_chart(fig_trend, use_container_width=True)
+    st.plotly_chart(fig_trend, width='stretch')
 else:
     st.info("当前筛选下无有效「日期」数据，无法绘制趋势图。")
 
@@ -537,7 +535,7 @@ if not pivot.empty:
         date_count = len(df_filtered["日期"].unique())
         if date_count > 0:
             pivot = pivot.assign(日均=pivot["合计"] / date_count)
-st.dataframe(pivot.style.format("{:,.2f}"), use_container_width=True)
+st.dataframe(pivot.style.format("{:,.2f}"), width='stretch')
 
 st.markdown("---")
 st.subheader("📋 明细数据")
@@ -603,7 +601,7 @@ if not pie_data.empty and pie_data["成交金额"].sum() > 0:
         },
     )
     fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-    st.plotly_chart(fig_pie, use_container_width=True)
+    st.plotly_chart(fig_pie, width='stretch')
 else:
     st.info("当前筛选下无成交金额数据。")
 
@@ -625,6 +623,6 @@ if not bar_src.empty:
     )
     fig_bar.update_layout(yaxis_title="成交金额（万元）", xaxis_title="部门", height=420)
     fig_bar.update_traces(texttemplate="%{y:.1f}", textposition="inside")
-    st.plotly_chart(fig_bar, use_container_width=True)
+    st.plotly_chart(fig_bar, width='stretch')
 else:
     st.info("当前筛选下无数据。")
