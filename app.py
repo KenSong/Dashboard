@@ -324,25 +324,30 @@ def render_detail_table_vertical_merge(df: pd.DataFrame, columns: list) -> str:
         body_rows.append("<tr>" + "".join(cells) + "</tr>")
 
     header = "<tr>" + "".join(f"<th>{html.escape(str(c))}</th>" for c in columns) + "</tr>"
+    # 文字颜色必须写死：深色主题下若不设 color，会继承浅色字 + 白底 → 白板
     style = """
     <style>
         .detail-merge-table {
             width: 100%;
             border-collapse: collapse;
             font-size: 14px;
+            color: #262730;
         }
         .detail-merge-table th, .detail-merge-table td {
-            border: 1px solid #ddd;
+            border: 1px solid #d0d5dd;
             padding: 10px 12px;
             text-align: center;
             vertical-align: middle;
+            color: #262730;
         }
         .detail-merge-table th {
-            background-color: #f0f2f6;
+            background-color: #f0f2f6 !important;
+            color: #262730 !important;
             font-weight: bold;
         }
         .detail-merge-table td {
-            background-color: #fff;
+            background-color: #ffffff !important;
+            color: #262730 !important;
         }
     </style>
     """
