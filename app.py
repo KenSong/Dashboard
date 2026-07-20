@@ -32,6 +32,20 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# --------------------------
+# 看板切换：新看板走独立模块，下方原有数据看板逻辑保持不动
+# --------------------------
+board = st.sidebar.radio(
+    "选择看板",
+    ["数据看板", "销量看板"],
+    key="board_selector",
+)
+if board == "销量看板":
+    from inventory_board import render as render_inventory
+
+    render_inventory()
+    st.stop()
+
 
 def _result_csv_path() -> Path:
     """与 app.py 同目录下的 result.csv（相对脚本所在文件夹，不依赖当前工作目录）。"""
