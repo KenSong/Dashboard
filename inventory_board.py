@@ -71,6 +71,8 @@ def max_business_date_label(df: pd.DataFrame) -> str:
 def apply_filters(
     df: pd.DataFrame,
     date_range: tuple,
+    selected_platforms: list = None,
+    selected_sub_platforms: list = None,
 ) -> pd.DataFrame:
     out = df.copy()
     if date_range and len(date_range) == 2 and date_range[0] and date_range[1]:
@@ -78,6 +80,10 @@ def apply_filters(
         end_date = pd.Timestamp(date_range[1])
         out = out.assign(_日期解析=pd.to_datetime(out["日期"], errors="coerce"))
         out = out[(out["_日期解析"] >= start_date) & (out["_日期解析"] <= end_date)].drop(columns=["_日期解析"])
+    if selected_platforms and len(selected_platforms) > 0:
+        out = out[out["平台"].isin(selected_platforms)]
+    if selected_sub_platforms and len(selected_sub_platforms) > 0:
+        out = out[out["子平台"].isin(selected_sub_platforms)]
     return out
 
 
@@ -133,7 +139,36 @@ def render() -> None:
         key=f"inv_date_range_{selected_dept}",
     )
 
-    df = apply_filters(df_all, date_range)
+    df_date_filtered = apply_filters(df_all, date_range)
+
+    platform_options = sorted(
+        [p for p in df_date_filtered["平台"].unique() if p],
+        key=_platform_sort_key,
+    )
+    platform_options_with_all = ["全部"] + platform_options
+    selected_platform = st.sidebar.selectbox(
+        "平台",
+        platform_options_with_all,
+        index=0,
+        key=f"inv_platform_{selected_dept}",
+    )
+    selected_platforms = [] if selected_platform == "全部" else [selected_platform]
+
+    sub_platform_options = sorted(
+        [s for s in df_date_filtered[df_date_filtered["平台"].isin(selected_platforms)]["子平台"].unique() if s]
+        if selected_platforms
+        else [s for s in df_date_filtered["子平台"].unique() if s]
+    )
+    sub_platform_options_with_all = ["全部"] + sub_platform_options
+    selected_sub_platform = st.sidebar.selectbox(
+        "子平台",
+        sub_platform_options_with_all,
+        index=0,
+        key=f"inv_sub_platform_{selected_dept}",
+    )
+    selected_sub_platforms = [] if selected_sub_platform == "全部" else [selected_sub_platform]
+
+    df = apply_filters(df_all, date_range, selected_platforms, selected_sub_platforms)
 
     total_qty = float(df["销售数量"].sum()) if not df.empty else 0.0
     product_cnt = df["产品"].nunique() if not df.empty else 0
