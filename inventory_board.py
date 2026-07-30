@@ -17,9 +17,20 @@ DEPARTMENT_CSV_MAP = {
     "八喜": "baxi_sales_amount.csv",
 }
 
+CSV_2025_MAP = {
+    "常温": "normal_sales_amount_2025.csv",
+}
+
 
 def _sales_csv_path(department: str) -> Path:
     filename = DEPARTMENT_CSV_MAP.get(department, "normal_sales_amount.csv")
+    return Path(__file__).resolve().parent / filename
+
+
+def _sales_csv_path_2025(department: str) -> Path:
+    filename = CSV_2025_MAP.get(department, "")
+    if not filename:
+        return Path()
     return Path(__file__).resolve().parent / filename
 
 
@@ -106,6 +117,16 @@ def render() -> None:
     df_all = load_sales_csv(str(csv_path), mtime)
     last_date = max_business_date_label(df_all)
 
+    # 2025年对比数据
+    df_2025 = pd.DataFrame()
+    csv_2025_path = _sales_csv_path_2025(selected_dept)
+    if csv_2025_path.is_file():
+        try:
+            mtime_2025 = csv_2025_path.stat().st_mtime
+            df_2025 = load_sales_csv(str(csv_2025_path), mtime_2025)
+        except Exception:
+            df_2025 = pd.DataFrame()
+
     st.markdown(
         f"<div style='display:flex;justify-content:space-between;align-items:flex-start;'>"
         f"<h1>📦 {selected_dept}销量看板</h1>"
@@ -139,6 +160,14 @@ def render() -> None:
         key=f"inv_date_range_{selected_dept}",
     )
 
+    # 启用2025年数据对比
+    show_2025 = st.sidebar.checkbox(
+        "显示2025年同期对比",
+        value=False,
+        key=f"inv_show_2025_{selected_dept}",
+        disabled=df_2025.empty,
+    )
+
     df_date_filtered = apply_filters(df_all, date_range)
 
     platform_options = sorted(
@@ -170,12 +199,27 @@ def render() -> None:
 
     df = apply_filters(df_all, date_range, selected_platforms, selected_sub_platforms)
 
+    # 2025年同期数据处理（日期对齐：年份减1）
+    df_2025_filtered = pd.DataFrame()
+    if show_2025 and not df_2025.empty and date_range and len(date_range) == 2:
+        start_date_2025 = pd.Timestamp(date_range[0]) - pd.Timedelta(days=365)
+        end_date_2025 = pd.Timestamp(date_range[1]) - pd.Timedelta(days=365)
+        df_2025_filtered = apply_filters(df_2025, (start_date_2025.date(), end_date_2025.date()), selected_platforms, selected_sub_platforms)
+
     total_qty = float(df["销售数量"].sum()) if not df.empty else 0.0
     product_cnt = df["产品"].nunique() if not df.empty else 0
+    total_qty_2025 = float(df_2025_filtered["销售数量"].sum()) if not df_2025_filtered.empty else 0.0
+    yoy_growth = ((total_qty - total_qty_2025) / total_qty_2025 * 100) if total_qty_2025 > 0 else 0.0
 
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     c1.metric("销售数量合计", f"{total_qty:,.0f}")
     c2.metric("产品数", f"{product_cnt:,}")
+    c3.metric(
+        "同比增长",
+        f"{yoy_growth:+.1f}%",
+        delta=f"较2025年同期 {total_qty_2025:,.0f}",
+        delta_color="inverse"
+    )
 
     st.markdown("---")
 
@@ -183,15 +227,39 @@ def render() -> None:
         tmp = df.assign(_日期=pd.to_datetime(df["日期"], errors="coerce")).dropna(subset=["_日期"])
         if not tmp.empty:
             st.subheader("📊 销售数量趋势（按日）")
-            daily = tmp.groupby(tmp["_日期"].dt.date, as_index=False)["销售数量"].sum()
-            daily.columns = ["日期", "销售数量"]
-            daily["日期"] = daily["日期"].astype(str)
-            fig_trend = px.bar(
-                daily,
-                x="日期",
-                y="销售数量",
-                labels={"销售数量": "销售数量"},
-            )
+            
+            # 2026年数据
+            daily_2026 = tmp.groupby(tmp["_日期"].dt.date, as_index=False)["销售数量"].sum()
+            daily_2026.columns = ["日期", "销售数量"]
+            daily_2026["日期"] = daily_2026["日期"].astype(str)
+            
+            # 准备对比数据
+            if show_2025 and not df_2025_filtered.empty:
+                tmp_2025 = df_2025_filtered.assign(_日期=pd.to_datetime(df_2025_filtered["日期"], errors="coerce")).dropna(subset=["_日期"])
+                if not tmp_2025.empty:
+                    daily_2025 = tmp_2025.groupby(tmp_2025["_日期"].dt.date, as_index=False)["销售数量"].sum()
+                    daily_2025.columns = ["日期", "销售数量_2025"]
+                    daily_2025["日期"] = daily_2025["日期"].astype(str)
+                    # 转换为2026年日期以便对比显示
+                    daily_2025["日期"] = daily_2025["日期"].str.replace("2025", "2026")
+                    daily = pd.merge(daily_2026, daily_2025, on="日期", how="outer").fillna(0)
+                    daily = daily.sort_values("日期")
+                    
+                    fig_trend = px.bar(
+                        daily,
+                        x="日期",
+                        y=["销售数量", "销售数量_2025"],
+                        labels={"value": "销售数量", "variable": "年份"},
+                        barmode="group",
+                    )
+                    fig_trend.for_each_trace(lambda t: t.update(name="2026年" if t.name == "销售数量" else "2025年"))
+                else:
+                    daily = daily_2026
+                    fig_trend = px.bar(daily, x="日期", y="销售数量", labels={"销售数量": "销售数量"})
+            else:
+                daily = daily_2026
+                fig_trend = px.bar(daily, x="日期", y="销售数量", labels={"销售数量": "销售数量"})
+            
             fig_trend.update_layout(
                 height=380,
                 margin=dict(l=10, r=10, t=10, b=10),
@@ -214,30 +282,58 @@ def render() -> None:
                 .sum()
                 .sort_values("销售数量", ascending=False)
             )
-            col_pie, col_bar = st.columns(2)
-            with col_pie:
-                fig_pie = px.pie(
-                    plat_sum,
-                    values="销售数量",
-                    names="平台",
-                    hole=0.35,
-                    title="各平台占比",
+            
+            if show_2025 and not df_2025_filtered.empty:
+                plat_sum_2025 = (
+                    df_2025_filtered.groupby("平台", as_index=False)["销售数量"]
+                    .sum()
+                    .sort_values("销售数量", ascending=False)
                 )
-                fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-                st.plotly_chart(fig_pie, width="stretch")
-            with col_bar:
-                fig_plat = px.bar(
-                    plat_sum.sort_values("平台", key=lambda s: s.map(_platform_sort_key)),
-                    x="平台",
-                    y="销售数量",
-                    title="各平台销售数量",
-                )
-                fig_plat.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=10))
-                fig_plat.update_traces(
-                    texttemplate="%{y:,.0f}",
-                    textposition="outside",
-                )
-                st.plotly_chart(fig_plat, width="stretch")
+                plat_sum_2025.columns = ["平台", "销售数量_2025"]
+                plat_compare = pd.merge(plat_sum, plat_sum_2025, on="平台", how="outer").fillna(0)
+                plat_compare = plat_compare.sort_values("平台", key=lambda s: s.map(_platform_sort_key))
+                
+                col_bar = st.columns(1)
+                with col_bar[0]:
+                    fig_plat = px.bar(
+                        plat_compare,
+                        x="平台",
+                        y=["销售数量", "销售数量_2025"],
+                        barmode="group",
+                        title="各平台销售数量对比",
+                    )
+                    fig_plat.for_each_trace(lambda t: t.update(name="2026年" if t.name == "销售数量" else "2025年"))
+                    fig_plat.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=10))
+                    fig_plat.update_traces(
+                        texttemplate="%{y:,.0f}",
+                        textposition="outside",
+                    )
+                    st.plotly_chart(fig_plat, width="stretch")
+            else:
+                col_pie, col_bar = st.columns(2)
+                with col_pie:
+                    fig_pie = px.pie(
+                        plat_sum,
+                        values="销售数量",
+                        names="平台",
+                        hole=0.35,
+                        title="各平台占比",
+                    )
+                    fig_pie.update_traces(textposition="inside", textinfo="percent+label")
+                    st.plotly_chart(fig_pie, width="stretch")
+                with col_bar:
+                    fig_plat = px.bar(
+                        plat_sum.sort_values("平台", key=lambda s: s.map(_platform_sort_key)),
+                        x="平台",
+                        y="销售数量",
+                        title="各平台销售数量",
+                    )
+                    fig_plat.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=10))
+                    fig_plat.update_traces(
+                        texttemplate="%{y:,.0f}",
+                        textposition="outside",
+                    )
+                    st.plotly_chart(fig_plat, width="stretch")
 
             st.markdown("---")
             st.subheader("🏆 产品 Top 15")
@@ -247,7 +343,33 @@ def render() -> None:
                 .sort_values("销售数量", ascending=False)
                 .head(15)
             )
-            if not top_prod.empty:
+            
+            if show_2025 and not df_2025_filtered.empty:
+                top_prod_2025 = (
+                    df_2025_filtered.groupby("产品", as_index=False)["销售数量"]
+                    .sum()
+                    .sort_values("销售数量", ascending=False)
+                )
+                top_prod_2025.columns = ["产品", "销售数量_2025"]
+                top_compare = pd.merge(top_prod, top_prod_2025, on="产品", how="left").fillna(0)
+                
+                if not top_compare.empty:
+                    fig_top = px.bar(
+                        top_compare,
+                        x=["销售数量", "销售数量_2025"],
+                        y="产品",
+                        orientation="h",
+                        barmode="group",
+                        title="",
+                    )
+                    fig_top.for_each_trace(lambda t: t.update(name="2026年" if t.name == "销售数量" else "2025年"))
+                    fig_top.update_layout(
+                        height=480,
+                        margin=dict(l=10, r=10, t=10, b=10),
+                        yaxis={"categoryorder": "total ascending"},
+                    )
+                    st.plotly_chart(fig_top, width="stretch")
+            elif not top_prod.empty:
                 fig_top = px.bar(
                     top_prod,
                     x="销售数量",
@@ -266,11 +388,29 @@ def render() -> None:
             st.subheader("📋 明细数据")
             display = df[["日期", "平台", "子平台", "产品", "销售数量"]].copy()
             display["销售数量"] = display["销售数量"].round(0)
-            st.dataframe(
-                display.style.format({"销售数量": "{:,.0f}"}),
-                width="stretch",
-                hide_index=True,
-            )
+            
+            if show_2025 and not df_2025_filtered.empty:
+                display_2025 = df_2025_filtered[["日期", "平台", "子平台", "产品", "销售数量"]].copy()
+                display_2025.columns = ["日期", "平台", "子平台", "产品", "销售数量_2025"]
+                display_2025["日期"] = display_2025["日期"].str.replace("2025", "2026")
+                display_2025["销售数量_2025"] = display_2025["销售数量_2025"].round(0)
+                display_compare = pd.merge(display, display_2025, on=["日期", "平台", "子平台", "产品"], how="outer").fillna(0)
+                display_compare["同比增长"] = display_compare.apply(
+                    lambda row: ((row["销售数量"] - row["销售数量_2025"]) / row["销售数量_2025"] * 100) 
+                    if row["销售数量_2025"] > 0 else 0,
+                    axis=1
+                )
+                st.dataframe(
+                    display_compare.style.format({"销售数量": "{:,.0f}", "销售数量_2025": "{:,.0f}", "同比增长": "{:+.1f}%"}),
+                    width="stretch",
+                    hide_index=True,
+                )
+            else:
+                st.dataframe(
+                    display.style.format({"销售数量": "{:,.0f}"}),
+                    width="stretch",
+                    hide_index=True,
+                )
         else:
             st.info("当前筛选下无有效日期数据。")
     else:
