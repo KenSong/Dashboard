@@ -243,7 +243,7 @@ def render() -> None:
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("销售数量合计", f"{total_qty:,.0f}")
-    c2.metric("销售金额合计(百万)", f"{total_amount_m:,.2f}")
+    c2.metric("产品销售成本(百万)", f"{total_amount_m:,.2f}")
     c3.metric("产品数", f"{product_cnt:,}")
     c4.metric(
         "数量同比",
