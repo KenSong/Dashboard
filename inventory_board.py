@@ -64,8 +64,8 @@ def load_sales_csv(path_str: str, _mtime: float) -> pd.DataFrame:
             df[col] = df[col].fillna("").astype(str).str.strip()
     if "销售数量" in df.columns:
         df["销售数量"] = pd.to_numeric(df["销售数量"], errors="coerce").fillna(0.0)
-    if "销售金额" in df.columns:
-        df["销售金额"] = pd.to_numeric(df["销售金额"], errors="coerce").fillna(0.0)
+    if "销售成本" in df.columns:
+        df["销售成本"] = pd.to_numeric(df["销售成本"], errors="coerce").fillna(0.0)
     if "日期" in df.columns:
         df["_日期解析"] = pd.to_datetime(df["日期"], errors="coerce")
         df = df.sort_values(
@@ -232,7 +232,7 @@ def render() -> None:
         df_damage = apply_filters(df_damage_all, date_range, selected_platforms, selected_sub_platforms)
 
     total_qty = float(df["销售数量"].sum()) if not df.empty else 0.0
-    total_amount = float(df["销售金额"].sum()) if not df.empty and "销售金额" in df.columns else 0.0
+    total_amount = float(df["销售成本"].sum()) if not df.empty and "销售成本" in df.columns else 0.0
     product_cnt = df["产品"].nunique() if not df.empty else 0
     total_qty_2025 = float(df_2025_filtered["销售数量"].sum()) if not df_2025_filtered.empty else 0.0
     yoy_qty_growth = ((total_qty - total_qty_2025) / total_qty_2025 * 100) if total_qty_2025 > 0 else 0.0
@@ -260,12 +260,12 @@ def render() -> None:
         if not tmp.empty:
             st.subheader("📊 销售趋势（按日）")
 
-            has_amount = "销售金额" in df.columns
+            has_amount = "销售成本" in df.columns
 
             # 2026年数据 - 按日汇总数量和金额
             daily_2026 = tmp.groupby(tmp["_日期"].dt.date).agg(
                 销售数量=("销售数量", "sum"),
-                销售金额=("销售金额", "sum") if has_amount else ("销售数量", "sum"),
+                销售成本=("销售成本", "sum") if has_amount else ("销售数量", "sum"),
             ).reset_index()
             daily_2026 = daily_2026.rename(columns={"_日期": "日期"})
             daily_2026["日期"] = daily_2026["日期"].astype(str)
@@ -276,8 +276,8 @@ def render() -> None:
                 tmp_2025 = df_2025_filtered.assign(_日期=pd.to_datetime(df_2025_filtered["日期"], errors="coerce")).dropna(subset=["_日期"])
                 if not tmp_2025.empty:
                     agg_dict = {"销售数量_2025": ("销售数量", "sum")}
-                    if "销售金额" in df_2025_filtered.columns:
-                        agg_dict["销售金额_2025"] = ("销售金额", "sum")
+                    if "销售成本" in df_2025_filtered.columns:
+                        agg_dict["销售成本_2025"] = ("销售成本", "sum")
                     daily_2025 = tmp_2025.groupby(tmp_2025["_日期"].dt.date).agg(**agg_dict).reset_index()
                     daily_2025 = daily_2025.rename(columns={"_日期": "日期"})
                     daily_2025["日期"] = daily_2025["日期"].astype(str)
@@ -307,11 +307,11 @@ def render() -> None:
                     textposition="outside",
                 ))
 
-            # 折线图：销售金额（仅在未对比2025年时显示）
+            # 折线图：销售成本（仅在未对比2025年时显示）
             if not show_2025:
-                line_cols = [c for c in ["销售金额"] if c in daily.columns]
-                line_colors = {"销售金额": "#EF553B"}
-                line_labels = {"销售金额": "销售金额"}
+                line_cols = [c for c in ["销售成本"] if c in daily.columns]
+                line_colors = {"销售成本": "#EF553B"}
+                line_labels = {"销售成本": "销售成本"}
 
                 for col in line_cols:
                     fig_trend.add_trace(go.Scatter(
@@ -336,20 +336,20 @@ def render() -> None:
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 barmode="group",
             )
-            if not show_2025 and "销售金额" in daily.columns:
-                layout_kwargs["yaxis2"] = dict(title="销售金额 (百万)", overlaying="y", side="right", showgrid=False)
+            if not show_2025 and "销售成本" in daily.columns:
+                layout_kwargs["yaxis2"] = dict(title="销售成本 (百万)", overlaying="y", side="right", showgrid=False)
             fig_trend.update_layout(**layout_kwargs)
             st.plotly_chart(fig_trend, width="stretch")
 
             st.markdown("---")
             st.subheader("📊 平台销售分布")
 
-            has_amount = "销售金额" in df.columns
+            has_amount = "销售成本" in df.columns
 
             # 按平台汇总（数量和金额）
             plat_grouped = df.groupby("平台", as_index=False).agg(
                 销售数量=("销售数量", "sum"),
-                销售金额=("销售金额", "sum") if has_amount else ("销售数量", "sum"),
+                销售成本=("销售成本", "sum") if has_amount else ("销售数量", "sum"),
             )
             plat_grouped = plat_grouped.sort_values("销售数量", ascending=False)
 
@@ -357,8 +357,8 @@ def render() -> None:
             plat_2025 = None
             if show_2025 and not df_2025_filtered.empty:
                 plat_agg = {"销售数量_2025": ("销售数量", "sum")}
-                if "销售金额" in df_2025_filtered.columns:
-                    plat_agg["销售金额_2025"] = ("销售金额", "sum")
+                if "销售成本" in df_2025_filtered.columns:
+                    plat_agg["销售成本_2025"] = ("销售成本", "sum")
                 plat_2025 = df_2025_filtered.groupby("平台", as_index=False).agg(**plat_agg)
 
             if plat_2025 is not None:
@@ -417,16 +417,16 @@ def render() -> None:
                         textposition="outside",
                     ))
 
-                    if "销售金额" in plat_sorted.columns:
+                    if "销售成本" in plat_sorted.columns:
                         fig_plat.add_trace(go.Scatter(
                             x=plat_sorted["平台"],
-                            y=plat_sorted["销售金额"],
-                            name="销售金额",
+                            y=plat_sorted["销售成本"],
+                            name="销售成本",
                             mode="lines+markers",
                             line=dict(color="#EF553B", width=2),
                             marker=dict(size=6),
                             yaxis="y2",
-                            text=[f"{v/1000000:,.2f}M" for v in plat_sorted["销售金额"]],
+                            text=[f"{v/1000000:,.2f}M" for v in plat_sorted["销售成本"]],
                             textposition="top center",
                             hovertemplate="%{text}<extra></extra>",
                         ))
@@ -435,7 +435,7 @@ def render() -> None:
                         height=380,
                         margin=dict(l=60, r=60, t=40, b=10),
                         yaxis=dict(title="销售数量"),
-                        yaxis2=dict(title="销售金额 (百万)", overlaying="y", side="right", showgrid=False),
+                        yaxis2=dict(title="销售成本 (百万)", overlaying="y", side="right", showgrid=False),
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     )
                     st.plotly_chart(fig_plat, width="stretch")
@@ -546,36 +546,36 @@ def render() -> None:
             st.subheader("📋 明细数据")
 
             display_cols = ["日期", "平台", "子平台", "产品", "销售数量"]
-            if "销售金额" in df.columns:
-                display_cols.append("销售金额")
+            if "销售成本" in df.columns:
+                display_cols.append("销售成本")
 
             display = df[display_cols].copy()
             display["销售数量"] = display["销售数量"].round(0)
-            if "销售金额" in display.columns:
-                display["销售金额"] = display["销售金额"].round(2)
+            if "销售成本" in display.columns:
+                display["销售成本"] = display["销售成本"].round(2)
 
             if show_2025 and not df_2025_filtered.empty:
                 display_2025_cols = ["日期", "平台", "子平台", "产品", "销售数量"]
-                if "销售金额" in df_2025_filtered.columns:
-                    display_2025_cols.append("销售金额")
+                if "销售成本" in df_2025_filtered.columns:
+                    display_2025_cols.append("销售成本")
 
                 display_2025 = df_2025_filtered[display_2025_cols].copy()
                 rename_map = {"销售数量": "销售数量_2025"}
-                if "销售金额" in display_2025.columns:
-                    rename_map["销售金额"] = "销售金额_2025"
+                if "销售成本" in display_2025.columns:
+                    rename_map["销售成本"] = "销售成本_2025"
                 display_2025 = display_2025.rename(columns=rename_map)
                 display_2025["日期"] = display_2025["日期"].str.replace("2025", "2026")
                 display_2025["销售数量_2025"] = display_2025["销售数量_2025"].round(0)
-                if "销售金额_2025" in display_2025.columns:
-                    display_2025["销售金额_2025"] = display_2025["销售金额_2025"].round(2)
+                if "销售成本_2025" in display_2025.columns:
+                    display_2025["销售成本_2025"] = display_2025["销售成本_2025"].round(2)
 
                 display_compare = pd.merge(display, display_2025, on=["日期", "平台", "子平台", "产品"], how="outer").fillna(0)
 
                 format_dict = {"销售数量": "{:,.0f}", "销售数量_2025": "{:,.0f}"}
-                if "销售金额" in display_compare.columns:
-                    format_dict["销售金额"] = "¥{:,.2f}"
-                if "销售金额_2025" in display_compare.columns:
-                    format_dict["销售金额_2025"] = "¥{:,.2f}"
+                if "销售成本" in display_compare.columns:
+                    format_dict["销售成本"] = "¥{:,.2f}"
+                if "销售成本_2025" in display_compare.columns:
+                    format_dict["销售成本_2025"] = "¥{:,.2f}"
 
                 st.dataframe(
                     display_compare.style.format(format_dict),
@@ -584,8 +584,8 @@ def render() -> None:
                 )
             else:
                 format_dict = {"销售数量": "{:,.0f}"}
-                if "销售金额" in display.columns:
-                    format_dict["销售金额"] = "¥{:,.2f}"
+                if "销售成本" in display.columns:
+                    format_dict["销售成本"] = "¥{:,.2f}"
                 st.dataframe(
                     display.style.format(format_dict),
                     width="stretch",
