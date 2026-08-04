@@ -22,6 +22,8 @@ CSV_2025_MAP = {
     "常温": "normal_sales_amount_2025.csv",
 }
 
+DAMAGE_CSV = "normal_damage.csv"
+
 
 def _sales_csv_path(department: str) -> Path:
     filename = DEPARTMENT_CSV_MAP.get(department, "normal_sales_amount.csv")
@@ -33,6 +35,10 @@ def _sales_csv_path_2025(department: str) -> Path:
     if not filename:
         return Path()
     return Path(__file__).resolve().parent / filename
+
+
+def _damage_csv_path() -> Path:
+    return Path(__file__).resolve().parent / DAMAGE_CSV
 
 
 def _platform_sort_key(name: str) -> int:
@@ -130,6 +136,16 @@ def render() -> None:
         except Exception:
             df_2025 = pd.DataFrame()
 
+    # 损坏数据
+    df_damage_all = pd.DataFrame()
+    damage_path = _damage_csv_path()
+    if damage_path.is_file():
+        try:
+            mtime_damage = damage_path.stat().st_mtime
+            df_damage_all = load_sales_csv(str(damage_path), mtime_damage)
+        except Exception:
+            df_damage_all = pd.DataFrame()
+
     st.markdown(
         f"<div style='display:flex;justify-content:space-between;align-items:flex-start;'>"
         f"<h1>📦 {selected_dept}销量看板</h1>"
@@ -210,6 +226,11 @@ def render() -> None:
         end_date_2025 = pd.Timestamp(date_range[1]) - pd.Timedelta(days=365)
         df_2025_filtered = apply_filters(df_2025, (start_date_2025.date(), end_date_2025.date()), selected_platforms, selected_sub_platforms)
 
+    # 损坏数据筛选
+    df_damage = pd.DataFrame()
+    if not df_damage_all.empty:
+        df_damage = apply_filters(df_damage_all, date_range, selected_platforms, selected_sub_platforms)
+
     total_qty = float(df["销售数量"].sum()) if not df.empty else 0.0
     total_amount = float(df["销售金额"].sum()) if not df.empty and "销售金额" in df.columns else 0.0
     product_cnt = df["产品"].nunique() if not df.empty else 0
@@ -218,7 +239,9 @@ def render() -> None:
 
     total_amount_m = total_amount / 1000000
 
-    c1, c2, c3, c4 = st.columns(4)
+    total_damage = float(abs(df_damage["销售数量"]).sum()) if not df_damage.empty else 0.0
+
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("销售数量合计", f"{total_qty:,.0f}")
     c2.metric("销售金额合计(百万)", f"{total_amount_m:,.2f}")
     c3.metric("产品数", f"{product_cnt:,}")
@@ -228,6 +251,7 @@ def render() -> None:
         delta=f"较2025年 {total_qty_2025:,.0f}",
         delta_color="inverse"
     )
+    c5.metric("7月损坏数量", f"{total_damage:,.0f}")
 
     st.markdown("---")
 
@@ -415,6 +439,50 @@ def render() -> None:
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     )
                     st.plotly_chart(fig_plat, width="stretch")
+
+            # 平台损坏产品分布
+            st.markdown("---")
+            st.subheader("📊 平台损坏产品分布")
+
+            if not df_damage.empty:
+                damage_abs = df_damage.copy()
+                damage_abs["销售数量"] = damage_abs["销售数量"].abs()
+
+                plat_damage = damage_abs.groupby("平台", as_index=False).agg(
+                    损坏数量=("销售数量", "sum"),
+                )
+                plat_damage = plat_damage.sort_values("损坏数量", ascending=False)
+                plat_damage = plat_damage.sort_values("平台", key=lambda s: s.map(_platform_sort_key))
+
+                col_pie_dmg, col_bar_dmg = st.columns(2)
+                with col_pie_dmg:
+                    fig_damage_pie = px.pie(
+                        plat_damage,
+                        values="损坏数量",
+                        names="平台",
+                        hole=0.35,
+                        title="各平台损坏占比",
+                    )
+                    fig_damage_pie.update_traces(textposition="inside", textinfo="percent+label")
+                    st.plotly_chart(fig_damage_pie, width="stretch")
+                with col_bar_dmg:
+                    fig_damage_bar = go.Figure()
+                    fig_damage_bar.add_trace(go.Bar(
+                        x=plat_damage["平台"],
+                        y=plat_damage["损坏数量"],
+                        name="损坏数量",
+                        marker_color="#EF553B",
+                        text=plat_damage["损坏数量"].apply(lambda v: f"{v:,.0f}"),
+                        textposition="outside",
+                    ))
+                    fig_damage_bar.update_layout(
+                        height=380,
+                        margin=dict(l=60, r=60, t=40, b=10),
+                        yaxis=dict(title="损坏数量"),
+                    )
+                    st.plotly_chart(fig_damage_bar, width="stretch")
+            else:
+                st.info("当前筛选条件下无损坏数据。")
 
             st.markdown("---")
             st.subheader("🏆 产品 Top 15（按销售数量）")
