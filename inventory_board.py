@@ -57,6 +57,7 @@ def load_sales_csv(path_str: str, _mtime: float) -> pd.DataFrame:
     rename = {
         "统计日期": "日期",
         "产品名称": "产品",
+        "销售金额": "销售成本",
     }
     df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
     for col in ("日期", "平台", "子平台", "产品"):
