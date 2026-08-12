@@ -9,20 +9,24 @@ import streamlit as st
 
 PLATFORM_ORDER = ["京东", "天猫", "拼多多", "抖音", "新零售", "多多买菜", "小程序及其他"]
 
-DEPARTMENTS = ["常温"]
+DEPARTMENTS = ["常温", "低温"]
 
 DEPARTMENT_CSV_MAP = {
     "常温": "normal_sales_amount.csv",
-    "低温": "low_temp_sales_amount.csv",
+    "低温": "low_sales_amount.csv",
     "奶粉": "milk_powder_sales_amount.csv",
     "八喜": "baxi_sales_amount.csv",
 }
 
 CSV_2025_MAP = {
     "常温": "normal_sales_amount_2025.csv",
+    "低温": "low_sales_amount_2025.csv",
 }
 
-DAMAGE_CSV = "normal_damage.csv"
+DAMAGE_CSV_MAP = {
+    "常温": "normal_damage.csv",
+    "低温": "low_damage.csv",
+}
 
 
 def _sales_csv_path(department: str) -> Path:
@@ -37,8 +41,9 @@ def _sales_csv_path_2025(department: str) -> Path:
     return Path(__file__).resolve().parent / filename
 
 
-def _damage_csv_path() -> Path:
-    return Path(__file__).resolve().parent / DAMAGE_CSV
+def _damage_csv_path(department: str) -> Path:
+    filename = DAMAGE_CSV_MAP.get(department, "normal_damage.csv")
+    return Path(__file__).resolve().parent / filename
 
 
 def _platform_sort_key(name: str) -> int:
@@ -108,6 +113,32 @@ def apply_filters(
     return out
 
 
+def apply_damage_filters(
+    df: pd.DataFrame,
+    date_range: tuple,
+    selected_platforms: list = None,
+    selected_sub_platforms: list = None,
+) -> pd.DataFrame:
+    """退损数据按月份过滤：日期范围覆盖的所有月份都纳入统计。
+
+    退损 CSV 为按月汇总数据（每月一条记录），故按所选日期范围覆盖的
+    月份进行过滤，而非精确到日期。
+    """
+    out = df.copy()
+    if date_range and len(date_range) == 2 and date_range[0] and date_range[1]:
+        start_month = pd.Timestamp(date_range[0]).to_period("M")
+        end_month = pd.Timestamp(date_range[1]).to_period("M")
+        out = out.assign(_日期解析=pd.to_datetime(out["日期"], errors="coerce"))
+        out["_月份"] = out["_日期解析"].dt.to_period("M")
+        out = out[(out["_月份"] >= start_month) & (out["_月份"] <= end_month)]
+        out = out.drop(columns=["_日期解析", "_月份"])
+    if selected_platforms and len(selected_platforms) > 0:
+        out = out[out["平台"].isin(selected_platforms)]
+    if selected_sub_platforms and len(selected_sub_platforms) > 0:
+        out = out[out["子平台"].isin(selected_sub_platforms)]
+    return out
+
+
 def render() -> None:
     st.sidebar.title("⚙️ 控制面板")
 
@@ -139,7 +170,7 @@ def render() -> None:
 
     # 损坏数据
     df_damage_all = pd.DataFrame()
-    damage_path = _damage_csv_path()
+    damage_path = _damage_csv_path(selected_dept)
     if damage_path.is_file():
         try:
             mtime_damage = damage_path.stat().st_mtime
@@ -172,7 +203,7 @@ def render() -> None:
     min_date = pd.to_datetime(date_list[0]) if date_list else pd.Timestamp.now() - pd.Timedelta(days=30)
     max_date = pd.to_datetime(date_list[-1]) if date_list else pd.Timestamp.now()
 
-    default_start_date = max_date - pd.Timedelta(days=6)
+    default_start_date = max(min_date, max_date - pd.Timedelta(days=6))
     date_range = st.sidebar.date_input(
         "统计日期范围",
         value=(default_start_date, max_date),
@@ -227,10 +258,10 @@ def render() -> None:
         end_date_2025 = pd.Timestamp(date_range[1]) - pd.Timedelta(days=365)
         df_2025_filtered = apply_filters(df_2025, (start_date_2025.date(), end_date_2025.date()), selected_platforms, selected_sub_platforms)
 
-    # 损坏数据筛选
+    # 损坏数据筛选（按月份覆盖统计）
     df_damage = pd.DataFrame()
     if not df_damage_all.empty:
-        df_damage = apply_filters(df_damage_all, date_range, selected_platforms, selected_sub_platforms)
+        df_damage = apply_damage_filters(df_damage_all, date_range, selected_platforms, selected_sub_platforms)
 
     total_qty = float(df["销售数量"].sum()) if not df.empty else 0.0
     total_amount = float(df["销售成本"].sum()) if not df.empty and "销售成本" in df.columns else 0.0
@@ -252,7 +283,7 @@ def render() -> None:
         delta=f"较2025年 {total_qty_2025:,.0f}",
         delta_color="inverse"
     )
-    c5.metric("7月损坏数量", f"{total_damage:,.0f}")
+    c5.metric("退损数量", f"{total_damage:,.0f}")
 
     st.markdown("---")
 
@@ -449,39 +480,79 @@ def render() -> None:
                 damage_abs = df_damage.copy()
                 damage_abs["销售数量"] = damage_abs["销售数量"].abs()
 
-                plat_damage = damage_abs.groupby("平台", as_index=False).agg(
-                    损坏数量=("销售数量", "sum"),
-                )
-                plat_damage = plat_damage.sort_values("损坏数量", ascending=False)
-                plat_damage = plat_damage.sort_values("平台", key=lambda s: s.map(_platform_sort_key))
+                # 判断日期范围是否跨多个月
+                is_multi_month = False
+                if date_range and len(date_range) == 2 and date_range[0] and date_range[1]:
+                    start_month = pd.Timestamp(date_range[0]).to_period("M")
+                    end_month = pd.Timestamp(date_range[1]).to_period("M")
+                    is_multi_month = end_month > start_month
 
-                col_pie_dmg, col_bar_dmg = st.columns(2)
-                with col_pie_dmg:
-                    fig_damage_pie = px.pie(
-                        plat_damage,
-                        values="损坏数量",
-                        names="平台",
-                        hole=0.35,
-                        title="各平台损坏占比",
+                if is_multi_month:
+                    # 跨月：按月+平台堆叠柱状图
+                    damage_abs = damage_abs.assign(
+                        _月份=pd.to_datetime(damage_abs["日期"], errors="coerce").dt.to_period("M").astype(str)
                     )
-                    fig_damage_pie.update_traces(textposition="inside", textinfo="percent+label")
-                    st.plotly_chart(fig_damage_pie, width="stretch")
-                with col_bar_dmg:
-                    fig_damage_bar = go.Figure()
-                    fig_damage_bar.add_trace(go.Bar(
-                        x=plat_damage["平台"],
-                        y=plat_damage["损坏数量"],
-                        name="损坏数量",
-                        marker_color="#EF553B",
-                        text=plat_damage["损坏数量"].apply(lambda v: f"{v:,.0f}"),
-                        textposition="outside",
-                    ))
-                    fig_damage_bar.update_layout(
+                    month_platform = damage_abs.groupby(["_月份", "平台"], as_index=False).agg(
+                        损坏数量=("销售数量", "sum"),
+                    )
+                    pivot = month_platform.pivot(
+                        index="_月份", columns="平台", values="损坏数量"
+                    ).fillna(0).sort_index()
+                    pivot = pivot[sorted(pivot.columns, key=_platform_sort_key)]
+
+                    fig_damage_stack = go.Figure()
+                    for platform in pivot.columns:
+                        fig_damage_stack.add_trace(go.Bar(
+                            x=pivot.index,
+                            y=pivot[platform],
+                            name=platform,
+                            text=pivot[platform].apply(lambda v: f"{v:,.0f}" if v > 0 else ""),
+                            textposition="inside",
+                        ))
+                    fig_damage_stack.update_layout(
                         height=380,
                         margin=dict(l=60, r=60, t=40, b=10),
                         yaxis=dict(title="损坏数量"),
+                        xaxis=dict(title="月份", type="category"),
+                        barmode="stack",
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     )
-                    st.plotly_chart(fig_damage_bar, width="stretch")
+                    st.plotly_chart(fig_damage_stack, width="stretch")
+                else:
+                    # 单月：保持现有饼图+柱状图
+                    plat_damage = damage_abs.groupby("平台", as_index=False).agg(
+                        损坏数量=("销售数量", "sum"),
+                    )
+                    plat_damage = plat_damage.sort_values("损坏数量", ascending=False)
+                    plat_damage = plat_damage.sort_values("平台", key=lambda s: s.map(_platform_sort_key))
+
+                    col_pie_dmg, col_bar_dmg = st.columns(2)
+                    with col_pie_dmg:
+                        fig_damage_pie = px.pie(
+                            plat_damage,
+                            values="损坏数量",
+                            names="平台",
+                            hole=0.35,
+                            title="各平台损坏占比",
+                        )
+                        fig_damage_pie.update_traces(textposition="inside", textinfo="percent+label")
+                        st.plotly_chart(fig_damage_pie, width="stretch")
+                    with col_bar_dmg:
+                        fig_damage_bar = go.Figure()
+                        fig_damage_bar.add_trace(go.Bar(
+                            x=plat_damage["平台"],
+                            y=plat_damage["损坏数量"],
+                            name="损坏数量",
+                            marker_color="#EF553B",
+                            text=plat_damage["损坏数量"].apply(lambda v: f"{v:,.0f}"),
+                            textposition="outside",
+                        ))
+                        fig_damage_bar.update_layout(
+                            height=380,
+                            margin=dict(l=60, r=60, t=40, b=10),
+                            yaxis=dict(title="损坏数量"),
+                        )
+                        st.plotly_chart(fig_damage_bar, width="stretch")
             else:
                 st.info("当前筛选条件下无损坏数据。")
 
