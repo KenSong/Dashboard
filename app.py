@@ -37,13 +37,18 @@ st.set_page_config(
 # --------------------------
 board = st.sidebar.radio(
     "选择看板",
-    ["数据看板", "销量看板"],
+    ["数据看板", "销量看板", "爆链看板"],
     key="board_selector",
 )
 if board == "销量看板":
     from inventory_board import render as render_inventory
 
     render_inventory()
+    st.stop()
+if board == "爆链看板":
+    from traffic_board import render as render_traffic
+
+    render_traffic()
     st.stop()
 
 
