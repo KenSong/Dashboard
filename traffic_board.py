@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 CSV_FILENAME = "traffic_source_summary.csv"
+GOAL_CSV_FILENAME = "traffic_goal_summary.csv"
 # 已知部门排序；CSV 中出现的新部门会追加在末尾
 DEPARTMENT_ORDER = ["常温", "低温", "八喜", "奶粉"]
 CHANNEL_ORDER = ["品牌", "站内", "站外"]
@@ -13,7 +14,7 @@ CHANNEL_COLORS = {
     "站内": "#1aabb8",
     "站外": "#e67e22",
 }
-NUMERIC_COLUMNS = ("访客数(UV)", "UV价值", "客单价", "成交转化率", "成交金额")
+NUMERIC_COLUMNS = ("访客数(UV)", "UV价值", "客单价", "成交转化率", "CTR", "成交金额")
 def _csv_path() -> Path:
     return Path(__file__).resolve().parent / CSV_FILENAME
 def _department_sort_key(name: str) -> int:
@@ -44,6 +45,28 @@ def load_traffic_csv(path_str: str, _mtime: float) -> pd.DataFrame:
             na_position="last",
         )
     return df
+
+def _goal_csv_path() -> Path:
+    return Path(__file__).resolve().parent / GOAL_CSV_FILENAME
+
+@st.cache_data(show_spinner=False)
+def load_goal_csv(path_str: str, _mtime: float) -> pd.DataFrame:
+    """读取目标数据CSV，列结构与源数据一致（日期/部门/商品 + 5个指标）。"""
+    path = Path(path_str)
+    if not path.is_file():
+        return pd.DataFrame()
+    df = pd.read_csv(path, encoding="utf-8-sig")
+    df.columns = [str(c).strip() for c in df.columns]
+    for col in ("日期", "部门", "商品"):
+        if col in df.columns:
+            df[col] = df[col].fillna("").astype(str).str.strip()
+    for col in NUMERIC_COLUMNS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    if "日期" in df.columns:
+        df["_日期解析"] = pd.to_datetime(df["日期"], errors="coerce")
+    return df
+
 def max_business_date_label(df: pd.DataFrame) -> str:
     if df.empty or "_日期解析" not in df.columns:
         return "—"
@@ -97,6 +120,7 @@ def aggregate_daily(df: pd.DataFrame) -> pd.DataFrame:
                 "UV价值": amount / uv if uv > 0 else 0.0,
                 "客单价": _weighted(group, "客单价"),
                 "成交转化率": _weighted(group, "成交转化率"),
+                "CTR": _weighted(group, "CTR"),
             }
         )
     return pd.DataFrame(rows).sort_values("_日期解析")
@@ -126,6 +150,7 @@ def aggregate_daily_by_channel(df: pd.DataFrame) -> pd.DataFrame:
                 "UV价值": amount / uv if uv > 0 else 0.0,
                 "客单价": _weighted(group, "客单价"),
                 "成交转化率": _weighted(group, "成交转化率"),
+                "CTR": _weighted(group, "CTR"),
             }
         )
     out = pd.DataFrame(rows)
@@ -159,7 +184,7 @@ CHART_LAYOUT = dict(
     font=dict(color="#333", size=12),
     hovermode="closest",
 )
-def _prepare_chart_daily(daily: pd.DataFrame) -> pd.DataFrame:
+def _prepare_chart_daily(daily: pd.DataFrame, goal_df: pd.DataFrame | None = None) -> pd.DataFrame:
     out = daily.copy().reset_index(drop=True)
     out["天序"] = [f"第{i + 1}天" for i in range(len(out))]
     out["成交金额_万"] = out["成交金额"] / 10000
@@ -168,6 +193,20 @@ def _prepare_chart_daily(daily: pd.DataFrame) -> pd.DataFrame:
     out["日期_label"] = out["_日期解析"].apply(
         lambda t: t.strftime("%m-%d") if pd.notna(t) else ""
     )
+    # 合并目标数据（按日期），目标列统一加 "_目标" 后缀
+    if goal_df is not None and not goal_df.empty and "_日期解析" in goal_df.columns:
+        goal_cols = [c for c in NUMERIC_COLUMNS if c in goal_df.columns]
+        if goal_cols:
+            g = goal_df[["_日期解析"] + goal_cols].copy()
+            g = g.rename(columns={c: f"{c}_目标" for c in goal_cols})
+            out = out.merge(g, on="_日期解析", how="left")
+            # 派生图表单位的目标列
+            if "成交金额_目标" in out.columns:
+                out["成交金额_万_目标"] = out["成交金额_目标"] / 10000
+            if "访客数(UV)_目标" in out.columns:
+                out["UV_万_目标"] = out["访客数(UV)_目标"] / 10000
+            if "成交转化率_目标" in out.columns:
+                out["转化率_pct_目标"] = out["成交转化率_目标"] * 100
     return out
 def _wan_label(value: float) -> str:
     if abs(value) >= 1:
@@ -185,8 +224,11 @@ def _fig_daily_metric(
     hover_col: str | None = None,
     hover_fmt: str = "{:,.2f}",
     text_fn=None,
+    goal_col: str | None = None,
+    goal_hover_col: str | None = None,
+    goal_hover_fmt: str | None = None,
 ) -> go.Figure:
-    """按天显示单个指标：柱状图或折线图。"""
+    """按天显示单个指标：柱状图或折线图；若提供 goal_col 则叠加目标虚线。"""
     x = chart_df["日期_label"]
     y = chart_df[y_col]
     hover_src = chart_df[hover_col] if hover_col else y
@@ -220,6 +262,25 @@ def _fig_daily_metric(
             textfont=dict(size=10, color="#FFFFFF"),
         )
     fig = go.Figure(trace)
+    # 叠加目标虚线
+    has_goal = goal_col is not None and goal_col in chart_df.columns
+    if has_goal:
+        goal_y = chart_df[goal_col]
+        goal_hover_src = chart_df[goal_hover_col] if goal_hover_col and goal_hover_col in chart_df.columns else goal_y
+        goal_fmt = goal_hover_fmt or hover_fmt
+        goal_customdata = [goal_fmt.format(v) if pd.notna(v) else "—" for v in goal_hover_src]
+        goal_hover_tpl = "%{x}<br>目标: %{customdata}<extra></extra>"
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=goal_y,
+                mode="lines",
+                line=dict(color="#e74c3c", width=2, dash="dash"),
+                name="目标",
+                customdata=goal_customdata,
+                hovertemplate=goal_hover_tpl,
+            )
+        )
     fig.update_layout(
         **CHART_LAYOUT,
         height=320,
@@ -227,12 +288,20 @@ def _fig_daily_metric(
         title=dict(text=title, x=0, font=dict(size=15)),
         yaxis=dict(title=y_title, gridcolor="rgba(0,0,0,0.06)", zeroline=False),
         xaxis=dict(title="", gridcolor="rgba(0,0,0,0)"),
-        showlegend=False,
+        showlegend=has_goal,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            font=dict(size=11),
+        ) if has_goal else None,
     )
     return fig
-def _render_metric_tabs(daily_df: pd.DataFrame) -> None:
+def _render_metric_tabs(daily_df: pd.DataFrame, goal_df: pd.DataFrame | None = None) -> None:
     """按天显示 5 个指标的 Tab 页：成交金额/UV价值/访客数/客单价/成交转化率。"""
-    chart_df = _prepare_chart_daily(daily_df)
+    chart_df = _prepare_chart_daily(daily_df, goal_df)
     tab1, tab2, tab3, tab4, tab5 = st.tabs(
         ["成交金额", "UV价值", "访客数", "客单价", "成交转化率"]
     )
@@ -243,6 +312,9 @@ def _render_metric_tabs(daily_df: pd.DataFrame) -> None:
                 chart_type="bar", y_title="金额（万）",
                 hover_col="成交金额", hover_fmt="¥{:,.2f}",
                 text_fn=_wan_label,
+                goal_col="成交金额_万_目标",
+                goal_hover_col="成交金额_目标",
+                goal_hover_fmt="¥{:,.2f}",
             ),
             width="stretch",
         )
@@ -252,6 +324,8 @@ def _render_metric_tabs(daily_df: pd.DataFrame) -> None:
                 chart_df, "UV价值", "UV价值", COLOR_UV_VALUE,
                 chart_type="line", y_title="UV价值（¥）",
                 hover_fmt="¥{:,.2f}", text_fn=lambda v: f"¥{v:.2f}",
+                goal_col="UV价值_目标",
+                goal_hover_fmt="¥{:,.2f}",
             ),
             width="stretch",
         )
@@ -262,6 +336,9 @@ def _render_metric_tabs(daily_df: pd.DataFrame) -> None:
                 chart_type="line", y_title="访客数（万）",
                 hover_col="访客数(UV)", hover_fmt="{:,.0f}",
                 text_fn=_wan_label,
+                goal_col="UV_万_目标",
+                goal_hover_col="访客数(UV)_目标",
+                goal_hover_fmt="{:,.0f}",
             ),
             width="stretch",
         )
@@ -271,6 +348,8 @@ def _render_metric_tabs(daily_df: pd.DataFrame) -> None:
                 chart_df, "客单价", "客单价", COLOR_AOV,
                 chart_type="line", y_title="客单价（¥）",
                 hover_fmt="¥{:,.2f}", text_fn=lambda v: f"¥{v:.0f}",
+                goal_col="客单价_目标",
+                goal_hover_fmt="¥{:,.2f}",
             ),
             width="stretch",
         )
@@ -281,6 +360,9 @@ def _render_metric_tabs(daily_df: pd.DataFrame) -> None:
                 chart_type="line", y_title="转化率（%）",
                 hover_col="成交转化率", hover_fmt="{:.2%}",
                 text_fn=lambda v: f"{v:.1f}%",
+                goal_col="转化率_pct_目标",
+                goal_hover_col="成交转化率_目标",
+                goal_hover_fmt="{:.2%}",
             ),
             width="stretch",
         )
@@ -295,6 +377,7 @@ def _prepare_chart_daily_by_channel(by_channel: pd.DataFrame) -> pd.DataFrame:
     out["成交金额_万"] = out["成交金额"] / 10000
     out["UV_万"] = out["访客数(UV)"] / 10000
     out["转化率_pct"] = out["成交转化率"] * 100
+    out["CTR_pct"] = out["CTR"] * 100
     daily_total = out.groupby("_日期解析")["成交金额"].transform("sum")
     out["成交金额_pct"] = (out["成交金额"] / daily_total * 100).round(2)
     return out
@@ -392,8 +475,8 @@ def _fig_channel_line(
 def _render_metric_tabs_by_channel(by_channel_df: pd.DataFrame) -> None:
     """按渠道拆分的 5 指标 Tab 页：成交金额(占比堆叠)/UV价值/访客数/客单价/成交转化率。"""
     chart_df = _prepare_chart_daily_by_channel(by_channel_df)
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
-        ["成交金额", "UV价值", "访客数", "客单价", "成交转化率"]
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+        ["成交金额", "UV价值", "访客数", "客单价", "成交转化率", "CTR"]
     )
     with tab1:
         st.plotly_chart(_fig_channel_amount_pct(chart_df), width="stretch")
@@ -418,6 +501,21 @@ def _render_metric_tabs_by_channel(by_channel_df: pd.DataFrame) -> None:
             _fig_channel_line(chart_df, "转化率_pct", "成交转化率（按渠道）", "转化率（%）", "{:.2f}%"),
             width="stretch",
         )
+    with tab6:
+        # CTR不分渠道，按日聚合为商品级单条线（同一天各渠道CTR值相同）
+        if not chart_df.empty and "CTR" in chart_df.columns:
+            ctr_daily = chart_df.groupby(
+                ["_日期解析", "日期_label"], as_index=False
+            ).agg({"CTR": "mean", "CTR_pct": "mean"})
+            st.plotly_chart(
+                _fig_daily_metric(
+                    ctr_daily, "CTR_pct", "CTR", "#27ae60",
+                    chart_type="line", y_title="CTR（%）",
+                    hover_col="CTR", hover_fmt="{:.2%}",
+                    text_fn=lambda v: f"{v:.1f}%",
+                ),
+                width="stretch",
+            )
 def render() -> None:
     st.sidebar.title("⚙️ 控制面板")
     csv_path = _csv_path()
@@ -426,6 +524,13 @@ def render() -> None:
     except OSError:
         mtime = 0.0
     df_all = load_traffic_csv(str(csv_path), mtime)
+    # 加载目标数据
+    goal_path = _goal_csv_path()
+    try:
+        goal_mtime = goal_path.stat().st_mtime
+    except OSError:
+        goal_mtime = 0.0
+    goal_all = load_goal_csv(str(goal_path), goal_mtime)
     dept_options = departments_in_data(df_all)
     if not dept_options:
         dept_options = DEPARTMENT_ORDER[:1]
@@ -449,7 +554,7 @@ def render() -> None:
     st.markdown("---")
     if df_dept.empty:
         st.error(f"❌ 未读取到数据。请将 `{CSV_FILENAME}` 放在：`{csv_path.parent}`")
-        st.info("期望列：日期、部门、商品、渠道、访客数(UV)、UV价值、客单价、成交转化率、成交金额")
+        st.info("期望列：日期、部门、商品、渠道、访客数(UV)、UV价值、客单价、成交转化率、CTR、成交金额")
         return
     st.sidebar.header("🔍 筛选条件")
     valid_dates = df_dept["_日期解析"].dropna()
@@ -463,6 +568,11 @@ def render() -> None:
         max_value=max_date,
         key=f"traffic_date_range_{selected_dept}",
     )
+    # 规范化：st.date_input 在起止日期相同时可能返回单个 date 对象，需转为 (date, date)
+    if not isinstance(date_range, tuple):
+        date_range = (date_range, date_range)
+    elif len(date_range) == 1:
+        date_range = (date_range[0], date_range[0])
     df = apply_filters(df_dept, date_range, None, None)
     # 指标卡片：取商品=all 的数据
     df_all_product_full = apply_filters(df_dept, date_range, None, None)
@@ -479,52 +589,63 @@ def render() -> None:
     daily_all = aggregate_daily(df_for_dod) if not df_for_dod.empty else pd.DataFrame()
     latest_row = daily_all.iloc[-1]
     prev_row = daily_all.iloc[-2] if len(daily_all) >= 2 else None
+    # 查找最新业务日对应的目标数据（同部门 + 商品=all）
+    goal_row = None
+    if not goal_all.empty:
+        goal_dept = goal_all[goal_all["部门"] == selected_dept].copy()
+        if not goal_dept.empty and "商品" in goal_dept.columns:
+            goal_dept = goal_dept[goal_dept["商品"] == "all"]
+        if not goal_dept.empty and "_日期解析" in goal_dept.columns:
+            latest_ts = latest_row["_日期解析"]
+            matched = goal_dept[goal_dept["_日期解析"] == latest_ts]
+            if not matched.empty:
+                goal_row = matched.iloc[0]
     range_uv = float(daily["访客数(UV)"].sum())
     range_amount = float(daily["成交金额"].sum())
     range_uv_value = range_amount / range_uv if range_uv > 0 else 0.0
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
-        if prev_row is not None:
+        if goal_row is not None:
             _metric_card(
                 "访客数(UV)",
                 f"{latest_row['访客数(UV)']:,.0f}",
-                _pct_delta(latest_row['访客数(UV)'], prev_row["访客数(UV)"]),
-                "较前日",
+                _pct_delta(latest_row['访客数(UV)'], goal_row["访客数(UV)"]),
+                "较目标",
             )
         else:
             st.metric("访客数(UV)", f"{latest_row['访客数(UV)']:,.0f}")
     with c2:
-        if prev_row is not None:
+        if goal_row is not None:
             _metric_card(
                 "成交金额",
                 f"¥{latest_row['成交金额']:,.0f}",
-                _pct_delta(latest_row["成交金额"], prev_row["成交金额"]),
-                "较前日",
+                _pct_delta(latest_row["成交金额"], goal_row["成交金额"]),
+                "较目标",
             )
         else:
             st.metric("成交金额", f"¥{latest_row['成交金额']:,.0f}")
     with c3:
         conv_pct = latest_row["成交转化率"] * 100
-        if prev_row is not None:
-            delta_pp = (latest_row["成交转化率"] - prev_row["成交转化率"]) * 100
-            st.metric("成交转化率", f"{conv_pct:.2f}%", delta=f"{delta_pp:+.2f}pp 较前日")
+        if goal_row is not None:
+            delta_pp = (latest_row["成交转化率"] - goal_row["成交转化率"]) * 100
+            st.metric("成交转化率", f"{conv_pct:.2f}%", delta=f"{delta_pp:+.2f}pp 较目标")
         else:
             st.metric("成交转化率", f"{conv_pct:.2f}%")
     with c4:
         uv_val = latest_row["UV价值"]
-        if prev_row is not None:
-            delta_uv = uv_val - prev_row["UV价值"]
-            st.metric("UV价值", f"¥{uv_val:.2f}", delta=f"{delta_uv:+.2f} ¥ 较前日")
+        if goal_row is not None:
+            delta_uv = uv_val - goal_row["UV价值"]
+            st.metric("UV价值", f"¥{uv_val:.2f}", delta=f"{delta_uv:+.2f} ¥ 较目标")
         else:
             st.metric("UV价值", f"¥{uv_val:.2f}")
     with c5:
         aov_val = latest_row["客单价"]
-        if prev_row is not None:
-            delta_aov = aov_val - prev_row["客单价"]
-            st.metric("客单价", f"¥{aov_val:.2f}", delta=f"{delta_aov:+.2f} ¥ 较前日")
+        if goal_row is not None:
+            delta_aov = aov_val - goal_row["客单价"]
+            st.metric("客单价", f"¥{aov_val:.2f}", delta=f"{delta_aov:+.2f} ¥ 较目标")
         else:
             st.metric("客单价", f"¥{aov_val:.2f}")
-    st.caption(f"指标卡片为最新业务日 **{latest_row['日期']}**店铺数据")
+    st.caption(f"指标卡片为最新业务日 **{latest_row['日期']}** 店铺数据，对比当日目标")
     def _daily_for_product(product: str) -> pd.DataFrame:
         """按商品过滤后按天聚合；仅尊重日期范围。"""
         sub = apply_filters(df_dept, date_range, None, None)
@@ -542,6 +663,18 @@ def render() -> None:
             return pd.DataFrame()
         return aggregate_daily_by_channel(sub)
     all_daily = _daily_for_product("all")
+    # 过滤目标数据：同部门 + 商品=all + 日期范围
+    goal_daily = pd.DataFrame()
+    if not goal_all.empty:
+        goal_daily = goal_all[goal_all["部门"] == selected_dept].copy()
+        if not goal_daily.empty and "商品" in goal_daily.columns:
+            goal_daily = goal_daily[goal_daily["商品"] == "all"]
+        if not goal_daily.empty and date_range and len(date_range) == 2 and date_range[0] and date_range[1]:
+            start_ts = pd.Timestamp(date_range[0])
+            end_ts = pd.Timestamp(date_range[1])
+            goal_daily = goal_daily[
+                (goal_daily["_日期解析"] >= start_ts) & (goal_daily["_日期解析"] <= end_ts)
+            ]
     by_channel_550 = _daily_by_channel_for_product("550g")
     by_channel_1100 = _daily_by_channel_for_product("1100g")
     st.markdown("---")
@@ -549,8 +682,8 @@ def render() -> None:
     if all_daily.empty:
         st.info("当前筛选条件下无商品=all 的数据。")
     else:
-        st.caption("仅统计商品=all 的数据，点击标签切换指标")
-        _render_metric_tabs(all_daily)
+        st.caption("仅统计商品=all 的数据，点击标签切换指标；红色虚线为目标值")
+        _render_metric_tabs(all_daily, goal_daily if not goal_daily.empty else None)
     st.markdown("---")
     st.subheader("📈 550g分析")
     if by_channel_550.empty:
@@ -600,6 +733,7 @@ def render() -> None:
         "UV价值": "¥{:,.2f}",
         "客单价": "¥{:,.2f}",
         "成交转化率": "{:.2%}",
+        "CTR": "{:.2%}",
         "成交金额": "¥{:,.2f}",
     }
     st.dataframe(
