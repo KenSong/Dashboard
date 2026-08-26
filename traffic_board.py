@@ -675,8 +675,6 @@ def render() -> None:
             goal_daily = goal_daily[
                 (goal_daily["_日期解析"] >= start_ts) & (goal_daily["_日期解析"] <= end_ts)
             ]
-    by_channel_550 = _daily_by_channel_for_product("550g")
-    by_channel_1100 = _daily_by_channel_for_product("1100g")
     st.markdown("---")
     st.subheader("📊 店铺总览按天趋势")
     if all_daily.empty:
@@ -684,20 +682,16 @@ def render() -> None:
     else:
         st.caption("仅统计商品=all 的数据，点击标签切换指标；红色虚线为目标值")
         _render_metric_tabs(all_daily, goal_daily if not goal_daily.empty else None)
-    st.markdown("---")
-    st.subheader("📈 550g分析")
-    if by_channel_550.empty:
-        st.info("当前筛选条件下无 550g 数据。")
-    else:
-        st.caption("仅统计商品=550g 的数据，按渠道拆分，点击标签切换指标")
-        _render_metric_tabs_by_channel(by_channel_550)
-    st.markdown("---")
-    st.subheader("📈 1100g分析")
-    if by_channel_1100.empty:
-        st.info("当前筛选条件下无 1100g 数据。")
-    else:
-        st.caption("仅统计商品=1100g 的数据，按渠道拆分，点击标签切换指标")
-        _render_metric_tabs_by_channel(by_channel_1100)
+    # 动态获取当前部门下的细分商品（排除 all），逐个生成分析区域
+    sub_products = sorted({p for p in df_dept["商品"].unique() if p and p != "all"})
+    for product in sub_products:
+        by_channel = _daily_by_channel_for_product(product)
+        if by_channel.empty:
+            continue
+        st.markdown("---")
+        st.subheader(f"📈 {product}分析")
+        st.caption(f"仅统计商品={product} 的数据，按渠道拆分，点击标签切换指标")
+        _render_metric_tabs_by_channel(by_channel)
     st.markdown("---")
     product_options = ["全部"] + sorted({p for p in df["商品"].unique() if p})
     channel_options = ["全部"] + sorted(
