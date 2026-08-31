@@ -9,13 +9,13 @@ import streamlit as st
 
 PLATFORM_ORDER = ["京东", "天猫", "拼多多", "抖音", "新零售", "多多买菜", "小程序及其他"]
 
-DEPARTMENTS = ["常温", "低温"]
+DEPARTMENTS = ["常温", "低温", "八喜"]
 
 DEPARTMENT_CSV_MAP = {
     "常温": "normal_sales_amount.csv",
     "低温": "low_sales_amount.csv",
     "奶粉": "milk_powder_sales_amount.csv",
-    "八喜": "baxi_sales_amount.csv",
+    "八喜": "icecream_sales_amount.csv",
 }
 
 CSV_2025_MAP = {
@@ -211,6 +211,11 @@ def render() -> None:
         max_value=max_date,
         key=f"inv_date_range_{selected_dept}",
     )
+    # 规范化：st.date_input 在起止日期相同时可能返回单个 date 对象，需转为 (date, date)
+    if not isinstance(date_range, tuple):
+        date_range = (date_range, date_range)
+    elif len(date_range) == 1:
+        date_range = (date_range[0], date_range[0])
 
     # 启用2025年数据对比
     show_2025 = st.sidebar.checkbox(
