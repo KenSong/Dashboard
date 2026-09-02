@@ -5,7 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 CSV_FILENAME = "traffic_source_summary.csv"
-GOAL_CSV_FILENAME = "traffic_goal_summary.csv"
+GOAL_CSV_FILENAME = "traffic_goals_summary.csv"
 # 已知部门排序；CSV 中出现的新部门会追加在末尾
 DEPARTMENT_ORDER = ["常温", "低温", "八喜", "奶粉"]
 CHANNEL_ORDER = ["品牌", "站内", "站外"]
@@ -57,7 +57,7 @@ def load_goal_csv(path_str: str, _mtime: float) -> pd.DataFrame:
         return pd.DataFrame()
     df = pd.read_csv(path, encoding="utf-8-sig")
     df.columns = [str(c).strip() for c in df.columns]
-    for col in ("日期", "部门", "商品"):
+    for col in ("日期", "部门", "商品", "渠道"):
         if col in df.columns:
             df[col] = df[col].fillna("").astype(str).str.strip()
     for col in NUMERIC_COLUMNS:
@@ -274,8 +274,9 @@ def _fig_daily_metric(
             go.Scatter(
                 x=x,
                 y=goal_y,
-                mode="lines",
+                mode="lines+markers",
                 line=dict(color="#e74c3c", width=2, dash="dash"),
+                marker=dict(size=6, color="#e74c3c"),
                 name="目标",
                 customdata=goal_customdata,
                 hovertemplate=goal_hover_tpl,
@@ -287,7 +288,7 @@ def _fig_daily_metric(
         margin=dict(l=40, r=20, t=40, b=40),
         title=dict(text=title, x=0, font=dict(size=15)),
         yaxis=dict(title=y_title, gridcolor="rgba(0,0,0,0.06)", zeroline=False),
-        xaxis=dict(title="", gridcolor="rgba(0,0,0,0)"),
+        xaxis=dict(title="", gridcolor="rgba(0,0,0,0)", type="category"),
         showlegend=has_goal,
         legend=dict(
             orientation="h",
@@ -299,7 +300,7 @@ def _fig_daily_metric(
         ) if has_goal else None,
     )
     return fig
-def _render_metric_tabs(daily_df: pd.DataFrame, goal_df: pd.DataFrame | None = None) -> None:
+def _render_metric_tabs(daily_df: pd.DataFrame, goal_df: pd.DataFrame | None = None, key_prefix: str = "total") -> None:
     """按天显示 5 个指标的 Tab 页：成交金额/UV价值/访客数/客单价/成交转化率。"""
     chart_df = _prepare_chart_daily(daily_df, goal_df)
     tab1, tab2, tab3, tab4, tab5 = st.tabs(
@@ -317,6 +318,7 @@ def _render_metric_tabs(daily_df: pd.DataFrame, goal_df: pd.DataFrame | None = N
                 goal_hover_fmt="¥{:,.2f}",
             ),
             width="stretch",
+            key=f"traffic_{key_prefix}_amount",
         )
     with tab2:
         st.plotly_chart(
@@ -328,6 +330,7 @@ def _render_metric_tabs(daily_df: pd.DataFrame, goal_df: pd.DataFrame | None = N
                 goal_hover_fmt="¥{:,.2f}",
             ),
             width="stretch",
+            key=f"traffic_{key_prefix}_uv_value",
         )
     with tab3:
         st.plotly_chart(
@@ -341,6 +344,7 @@ def _render_metric_tabs(daily_df: pd.DataFrame, goal_df: pd.DataFrame | None = N
                 goal_hover_fmt="{:,.0f}",
             ),
             width="stretch",
+            key=f"traffic_{key_prefix}_visitors",
         )
     with tab4:
         st.plotly_chart(
@@ -352,6 +356,7 @@ def _render_metric_tabs(daily_df: pd.DataFrame, goal_df: pd.DataFrame | None = N
                 goal_hover_fmt="¥{:,.2f}",
             ),
             width="stretch",
+            key=f"traffic_{key_prefix}_aov",
         )
     with tab5:
         st.plotly_chart(
@@ -365,6 +370,7 @@ def _render_metric_tabs(daily_df: pd.DataFrame, goal_df: pd.DataFrame | None = N
                 goal_hover_fmt="{:.2%}",
             ),
             width="stretch",
+            key=f"traffic_{key_prefix}_conv",
         )
 def _prepare_chart_daily_by_channel(by_channel: pd.DataFrame) -> pd.DataFrame:
     """为按渠道拆分的日数据添加图表列。"""
@@ -412,7 +418,7 @@ def _fig_channel_amount_pct(chart_df: pd.DataFrame) -> go.Figure:
             zeroline=False,
             ticksuffix="%",
         ),
-        xaxis=dict(title="", gridcolor="rgba(0,0,0,0)"),
+        xaxis=dict(title="", gridcolor="rgba(0,0,0,0)", type="category"),
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -429,8 +435,11 @@ def _fig_channel_line(
     title: str,
     y_title: str = "",
     hover_fmt: str = "{:,.2f}",
+    goal_df: pd.DataFrame | None = None,
+    goal_y_col: str | None = None,
+    goal_hover_fmt: str | None = None,
 ) -> go.Figure:
-    """按渠道拆分的多折线图（3 条线）。"""
+    """按渠道拆分的多折线图（3 条线）；若提供 goal_df 则叠加各渠道目标虚线。"""
     fig = go.Figure()
     for channel in CHANNEL_ORDER:
         sub = chart_df[chart_df["渠道"] == channel]
@@ -438,30 +447,47 @@ def _fig_channel_line(
             continue
         color = CHANNEL_COLORS.get(channel, COLOR_UV)
         customdata = [hover_fmt.format(v) for v in sub[y_col]]
-        # 生成图上显示的文本
         text_labels = [hover_fmt.format(v) for v in sub[y_col]]
         fig.add_trace(
             go.Scatter(
                 x=sub["日期_label"],
                 y=sub[y_col],
-                mode="lines+markers+text",  # 开启文字
+                mode="lines+markers+text",
                 name=channel,
                 line=dict(color=color, width=2.5),
                 marker=dict(size=7, color=color),
                 customdata=customdata,
                 text=text_labels,
                 textposition="top center",
-                textfont=dict(size=9, color="#FFFFFF"), # 强制纯白文字
+                textfont=dict(size=9, color="#FFFFFF"),
                 hovertemplate="%{x}<br>" + title + "（%{fullData.name}）: %{customdata}<extra></extra>",
             )
         )
+        # 叠加该渠道目标虚线（统一红色，同店铺总览风格）
+        if goal_df is not None and not goal_df.empty and goal_y_col and goal_y_col in goal_df.columns:
+            gsub = goal_df[goal_df["渠道"] == channel]
+            if not gsub.empty:
+                gfmt = goal_hover_fmt or hover_fmt
+                gcustom = [gfmt.format(v) for v in gsub[goal_y_col]]
+                fig.add_trace(
+                    go.Scatter(
+                        x=gsub["日期_label"],
+                        y=gsub[goal_y_col],
+                        mode="lines+markers",
+                        name=f"{channel} 目标",
+                        line=dict(color="#e74c3c", width=2, dash="dash"),
+                        marker=dict(size=6, color="#e74c3c"),
+                        customdata=gcustom,
+                        hovertemplate="%{x}<br>" + channel + " 目标: %{customdata}<extra></extra>",
+                    )
+                )
     fig.update_layout(
         **CHART_LAYOUT,
         height=320,
         margin=dict(l=40, r=20, t=40, b=40),
         title=dict(text=title, x=0, font=dict(size=15)),
         yaxis=dict(title=y_title, gridcolor="rgba(0,0,0,0.06)", zeroline=False),
-        xaxis=dict(title="", gridcolor="rgba(0,0,0,0)"),
+        xaxis=dict(title="", gridcolor="rgba(0,0,0,0)", type="category"),
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -472,49 +498,171 @@ def _fig_channel_line(
         ),
     )
     return fig
-def _render_metric_tabs_by_channel(by_channel_df: pd.DataFrame) -> None:
-    """按渠道拆分的 5 指标 Tab 页：成交金额(占比堆叠)/UV价值/访客数/客单价/成交转化率。"""
-    chart_df = _prepare_chart_daily_by_channel(by_channel_df)
+def _fig_channel_amount_vs_goal(
+    chart_df: pd.DataFrame,
+    goal_df: pd.DataFrame | None = None,
+) -> go.Figure:
+    """成交金额按渠道：实际值柱状 + 红色目标虚线（同店铺总览风格），hover 显示具体金额。"""
+    fig = go.Figure()
+    for channel in CHANNEL_ORDER:
+        sub = chart_df[chart_df["渠道"] == channel]
+        if sub.empty:
+            continue
+        color = CHANNEL_COLORS.get(channel, COLOR_UV)
+        fig.add_trace(
+            go.Bar(
+                x=sub["日期_label"],
+                y=sub["成交金额"],
+                name=f"{channel} 实际",
+                marker_color=color,
+                text=[f"¥{v/10000:.1f}万" for v in sub["成交金额"]],
+                textposition="outside",
+                textfont=dict(size=10, color="#FFFFFF"),
+                customdata=[f"¥{v:,.0f}" for v in sub["成交金额"]],
+                hovertemplate="%{x}<br>" + channel + " 实际: %{customdata}<extra></extra>",
+            )
+        )
+        if goal_df is not None and not goal_df.empty and "成交金额" in goal_df.columns:
+            gsub = goal_df[goal_df["渠道"] == channel]
+            if not gsub.empty:
+                fig.add_trace(
+                    go.Scatter(
+                        x=gsub["日期_label"],
+                        y=gsub["成交金额"],
+                        mode="lines+markers",
+                        name="目标",
+                        line=dict(color="#e74c3c", width=2, dash="dash"),
+                        marker=dict(size=6, color="#e74c3c"),
+                        customdata=[f"¥{v:,.0f}" for v in gsub["成交金额"]],
+                        hovertemplate="%{x}<br>目标: %{customdata}<extra></extra>",
+                    )
+                )
+    fig.update_layout(
+        **CHART_LAYOUT,
+        height=320,
+        margin=dict(l=40, r=20, t=40, b=40),
+        title=dict(text="成交金额（按渠道：实际 vs 目标）", x=0, font=dict(size=15)),
+        yaxis=dict(title="金额（元）", gridcolor="rgba(0,0,0,0.06)", zeroline=False),
+        xaxis=dict(title="", gridcolor="rgba(0,0,0,0)", type="category"),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            font=dict(size=11),
+        ),
+    )
+    return fig
+def _render_metric_tabs_by_channel(
+    by_channel_df: pd.DataFrame,
+    product: str = "",
+    goal_df: pd.DataFrame | None = None,
+    channel_filter: str = "全部",
+) -> None:
+    """按渠道拆分的 6 指标 Tab 页；若提供 goal_df 则各 tab 叠加目标对比；channel_filter 可只看单一渠道。"""
+    chart_df_full = _prepare_chart_daily_by_channel(by_channel_df)
+    # 按渠道筛选（CTR 除外，CTR 为商品级）
+    if channel_filter and channel_filter != "全部":
+        chart_df = chart_df_full[chart_df_full["渠道"] == channel_filter].copy()
+    else:
+        chart_df = chart_df_full
+    # 准备目标数据：按日期+渠道聚合，生成日期_label
+    goal_chart_full = pd.DataFrame()
+    if goal_df is not None and not goal_df.empty:
+        goal_chart_full = goal_df.copy()
+        goal_chart_full["_日期解析"] = pd.to_datetime(goal_chart_full["日期"], errors="coerce")
+        goal_chart_full = goal_chart_full.dropna(subset=["_日期解析"])
+        goal_chart_full["日期_label"] = goal_chart_full["_日期解析"].dt.strftime("%m-%d")
+        for col in NUMERIC_COLUMNS:
+            if col in goal_chart_full.columns:
+                goal_chart_full[col] = pd.to_numeric(goal_chart_full[col], errors="coerce")
+        if "成交转化率" in goal_chart_full.columns:
+            goal_chart_full["转化率_pct"] = goal_chart_full["成交转化率"] * 100
+    if channel_filter and channel_filter != "全部":
+        goal_chart = goal_chart_full[goal_chart_full["渠道"] == channel_filter].copy() if not goal_chart_full.empty else pd.DataFrame()
+    else:
+        goal_chart = goal_chart_full
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
         ["成交金额", "UV价值", "访客数", "客单价", "成交转化率", "CTR"]
     )
     with tab1:
-        st.plotly_chart(_fig_channel_amount_pct(chart_df), width="stretch")
+        if not goal_chart.empty:
+            st.plotly_chart(
+                _fig_channel_amount_vs_goal(chart_df, goal_chart),
+                width="stretch",
+                key=f"traffic_ch_{product}_amount",
+            )
+        else:
+            st.plotly_chart(_fig_channel_amount_pct(chart_df), width="stretch", key=f"traffic_ch_{product}_amount")
     with tab2:
         st.plotly_chart(
-            _fig_channel_line(chart_df, "UV价值", "UV价值（按渠道）", "UV价值（¥）", "¥{:,.2f}"),
+            _fig_channel_line(
+                chart_df, "UV价值", "UV价值（按渠道）", "UV价值（¥）", "¥{:,.2f}",
+                goal_df=goal_chart if not goal_chart.empty else None,
+                goal_y_col="UV价值", goal_hover_fmt="¥{:,.2f}",
+            ),
             width="stretch",
+            key=f"traffic_ch_{product}_uv_value",
         )
     with tab3:
-        # 修复：使用原始访客数字段，不再用UV_万，展示真实几百/几千数值
         st.plotly_chart(
-            _fig_channel_line(chart_df, "访客数(UV)", "访客数（按渠道）", "访客数", "{:,.0f}"),
+            _fig_channel_line(
+                chart_df, "访客数(UV)", "访客数（按渠道）", "访客数", "{:,.0f}",
+                goal_df=goal_chart if not goal_chart.empty else None,
+                goal_y_col="访客数(UV)", goal_hover_fmt="{:,.0f}",
+            ),
             width="stretch",
+            key=f"traffic_ch_{product}_visitors",
         )
     with tab4:
         st.plotly_chart(
-            _fig_channel_line(chart_df, "客单价", "客单价（按渠道）", "客单价（¥）", "¥{:,.2f}"),
+            _fig_channel_line(
+                chart_df, "客单价", "客单价（按渠道）", "客单价（¥）", "¥{:,.2f}",
+                goal_df=goal_chart if not goal_chart.empty else None,
+                goal_y_col="客单价", goal_hover_fmt="¥{:,.2f}",
+            ),
             width="stretch",
+            key=f"traffic_ch_{product}_aov",
         )
     with tab5:
         st.plotly_chart(
-            _fig_channel_line(chart_df, "转化率_pct", "成交转化率（按渠道）", "转化率（%）", "{:.2f}%"),
+            _fig_channel_line(
+                chart_df, "转化率_pct", "成交转化率（按渠道）", "转化率（%）", "{:.2f}%",
+                goal_df=goal_chart if not goal_chart.empty else None,
+                goal_y_col="转化率_pct", goal_hover_fmt="{:.2f}%",
+            ),
             width="stretch",
+            key=f"traffic_ch_{product}_conv",
         )
     with tab6:
-        # CTR不分渠道，按日聚合为商品级单条线（同一天各渠道CTR值相同）
-        if not chart_df.empty and "CTR" in chart_df.columns:
-            ctr_daily = chart_df.groupby(
+        # CTR不分渠道，按日聚合为商品级单条线（同一天各渠道CTR值相同），使用全量数据
+        if not chart_df_full.empty and "CTR" in chart_df_full.columns:
+            ctr_daily = chart_df_full.groupby(
                 ["_日期解析", "日期_label"], as_index=False
             ).agg({"CTR": "mean", "CTR_pct": "mean"})
+            # CTR目标：商品级（各渠道行CTR相同，取均值），合并到 ctr_daily
+            ctr_goal_col = None
+            if not goal_chart_full.empty and "CTR" in goal_chart_full.columns:
+                ctr_goal = goal_chart_full.groupby(
+                    ["_日期解析", "日期_label"], as_index=False
+                ).agg({"CTR": "mean"})
+                ctr_goal["CTR目标_pct"] = ctr_goal["CTR"] * 100
+                ctr_daily = ctr_daily.merge(
+                    ctr_goal[["日期_label", "CTR目标_pct"]], on="日期_label", how="left"
+                )
+                ctr_goal_col = "CTR目标_pct"
             st.plotly_chart(
                 _fig_daily_metric(
                     ctr_daily, "CTR_pct", "CTR", "#27ae60",
                     chart_type="line", y_title="CTR（%）",
                     hover_col="CTR", hover_fmt="{:.2%}",
                     text_fn=lambda v: f"{v:.1f}%",
+                    goal_col=ctr_goal_col,
+                    goal_hover_fmt="{:.2%}",
                 ),
                 width="stretch",
+                key=f"traffic_ch_{product}_ctr",
             )
 def render() -> None:
     st.sidebar.title("⚙️ 控制面板")
@@ -560,7 +708,7 @@ def render() -> None:
     valid_dates = df_dept["_日期解析"].dropna()
     min_date = valid_dates.min().date() if not valid_dates.empty else pd.Timestamp.now().date()
     max_date = valid_dates.max().date() if not valid_dates.empty else pd.Timestamp.now().date()
-    default_start = max(min_date, (pd.Timestamp(max_date) - pd.Timedelta(days=13)).date())
+    default_start = max(min_date, (pd.Timestamp(max_date) - pd.Timedelta(days=6)).date())
     date_range = st.sidebar.date_input(
         "统计日期范围",
         value=(default_start, max_date),
@@ -681,17 +829,44 @@ def render() -> None:
         st.info("当前筛选条件下无商品=all 的数据。")
     else:
         st.caption("仅统计商品=all 的数据，点击标签切换指标；红色虚线为目标值")
-        _render_metric_tabs(all_daily, goal_daily if not goal_daily.empty else None)
+        _render_metric_tabs(all_daily, goal_daily if not goal_daily.empty else None, key_prefix=f"total_{selected_dept}")
     # 动态获取当前部门下的细分商品（排除 all），逐个生成分析区域
     sub_products = sorted({p for p in df_dept["商品"].unique() if p and p != "all"})
     for product in sub_products:
         by_channel = _daily_by_channel_for_product(product)
         if by_channel.empty:
             continue
+        # 该商品的分渠道目标（按部门+商品+日期范围过滤）
+        prod_goal = pd.DataFrame()
+        if not goal_all.empty:
+            prod_goal = goal_all[goal_all["部门"] == selected_dept].copy()
+            if not prod_goal.empty and "商品" in prod_goal.columns:
+                prod_goal = prod_goal[prod_goal["商品"] == product]
+            if not prod_goal.empty and date_range and len(date_range) == 2 and date_range[0] and date_range[1]:
+                start_ts = pd.Timestamp(date_range[0])
+                end_ts = pd.Timestamp(date_range[1])
+                prod_goal = prod_goal[
+                    (prod_goal["_日期解析"] >= start_ts) & (prod_goal["_日期解析"] <= end_ts)
+                ]
         st.markdown("---")
-        st.subheader(f"📈 {product}分析")
-        st.caption(f"仅统计商品={product} 的数据，按渠道拆分，点击标签切换指标")
-        _render_metric_tabs_by_channel(by_channel)
+        col_title, col_chan = st.columns([4, 1])
+        with col_title:
+            st.subheader(f"📈 {product}分析")
+            st.caption(f"仅统计商品={product} 的数据，按渠道拆分，点击标签切换指标；目标值按渠道对比")
+        with col_chan:
+            channel_filter = st.selectbox(
+                "渠道筛选",
+                ["品牌", "站内", "站外"],
+                index=0,
+                key=f"traffic_ch_filter_{selected_dept}_{product}",
+                label_visibility="collapsed",
+            )
+        _render_metric_tabs_by_channel(
+            by_channel,
+            product=f"{selected_dept}_{product}",
+            goal_df=prod_goal if not prod_goal.empty else None,
+            channel_filter=channel_filter,
+        )
     st.markdown("---")
     product_options = ["全部"] + sorted({p for p in df["商品"].unique() if p})
     channel_options = ["全部"] + sorted(
