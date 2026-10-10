@@ -102,6 +102,35 @@ def load_result_csv(path_str: str, _mtime: float) -> pd.DataFrame:
     return df
 
 
+def _result_2025_csv_path() -> Path:
+    """去年同期成交金额数据（result_2025.csv）。"""
+    return Path(__file__).resolve().parent / "result_2025.csv"
+
+
+RESULT_2025_CSV = _result_2025_csv_path()
+
+
+@st.cache_data(show_spinner=False)
+def load_result_2025_csv(path_str: str, _mtime: float) -> pd.DataFrame:
+    """读取去年同期成交金额数据，按月-日匹配用于同比对比。"""
+    path = Path(path_str)
+    if not path.is_file() or _mtime == 0.0:
+        return pd.DataFrame()
+    df = pd.read_csv(path, encoding="utf-8-sig")
+    df.columns = [str(c).strip() for c in df.columns]
+    if "日期" not in df.columns:
+        return pd.DataFrame()
+    df["日期"] = df["日期"].fillna("").astype(str).str.strip()
+    df["部门"] = df["部门"].fillna("").astype(str).str.strip()
+    df["平台"] = df["平台"].fillna("").astype(str).str.strip()
+    df["成交金额"] = pd.to_numeric(df["成交金额"], errors="coerce").fillna(0.0)
+    # 解析日期并提取月-日，用于同比匹配
+    df["_日期解析"] = pd.to_datetime(df["日期"], errors="coerce")
+    df = df.dropna(subset=["_日期解析"])
+    df["_月日"] = df["_日期解析"].dt.strftime("%m-%d")
+    return df
+
+
 def max_business_date_label(df: pd.DataFrame) -> str:
     """取「日期」列中可解析的最大日期，格式 YYYY-MM-DD；无有效值时返回 —。"""
     if df.empty or "日期" not in df.columns:
@@ -206,10 +235,11 @@ if date_list:
         # 保存原始的日期范围值
         original_date_range = date_range
         
-        # 检测日期范围是否有效
-        if not isinstance(date_range, tuple) or len(date_range) != 2:
-            # 用户可能正在选择日期，暂时使用默认日期范围，不显示警告
-            date_range = (default_start_date, default_end_date)
+        # 规范化：st.date_input 在起止日期相同时可能返回单个 date 对象，需转为 (date, date)
+        if not isinstance(date_range, tuple):
+            date_range = (date_range, date_range)
+        elif len(date_range) == 1:
+            date_range = (date_range[0], date_range[0])
         
         # 检测用户是否手动修改了日期范围（使用原始值进行比较）
         if isinstance(original_date_range, tuple) and len(original_date_range) == 2:
@@ -488,11 +518,13 @@ if not _trend.empty:
     if not is_618_mode and not user_manually_selected and len(trend_sum_full) > 10:
         trend_sum_full = trend_sum_full.tail(10)
     
-    if is_618_mode:
+    # 判断当前筛选范围内是否有目标金额数据
+    _has_goal = trend_sum_full["目标金额"].sum() > 0
+    if _has_goal:
         st.subheader("📊 成交金额与目标金额趋势")
     else:
         st.subheader("📊 成交金额趋势")
-    
+
     fig_trend = px.bar(
         trend_sum_full,
         x="_日期",
@@ -500,19 +532,44 @@ if not _trend.empty:
         title="",
         labels={'成交金额': '成交金额'},
     )
-    
-    # 只有在618模式下才显示目标金额折线图
-    if is_618_mode:
+
+    # 有目标金额数据时显示目标金额折线图（仅从有目标数据的日期开始画线）
+    if _has_goal:
+        # 将目标金额为0的日期设为None，使折线在有目标数据的日期之间才连线
+        _goal_y = trend_sum_full["目标金额"].where(trend_sum_full["目标金额"] > 0, other=None)
         fig_trend.add_scatter(
             x=trend_sum_full["_日期"],
-            y=trend_sum_full["目标金额"],
+            y=_goal_y,
             mode='lines+markers',
             name='目标金额',
             line=dict(width=3, color='red'),
             marker=dict(size=8),
             hovertemplate="%{x|%Y-%m-%d}<br>目标金额：%{y:,.2f} 万元<extra></extra>"
         )
-    
+
+    # 去年同期成交金额（按月-日匹配，仅在2025文件存在且当前展示日期有同期数据时画线）
+    if RESULT_2025_CSV.is_file():
+        _df_2025 = load_result_2025_csv(str(RESULT_2025_CSV), RESULT_2025_CSV.stat().st_mtime)
+        if not _df_2025.empty:
+            _df_2025_f = _df_2025.copy()
+            if selected_dept:
+                _df_2025_f = _df_2025_f[_df_2025_f["部门"].isin(selected_dept)]
+            if selected_plat:
+                _df_2025_f = _df_2025_f[_df_2025_f["平台"].isin(selected_plat)]
+            _ly = _df_2025_f.groupby("_月日", as_index=False).agg(成交金额=("成交金额", "sum"))
+            _ly_map = dict(zip(_ly["_月日"], _ly["成交金额"]))
+            _ly_y = [_ly_map.get(d.strftime("%m-%d")) for d in trend_sum_full["_日期"]]
+            if any(v is not None for v in _ly_y):
+                fig_trend.add_scatter(
+                    x=trend_sum_full["_日期"],
+                    y=_ly_y,
+                    mode='lines+markers',
+                    name='去年同期成交金额',
+                    line=dict(width=2, color='green', dash='dash'),
+                    marker=dict(size=6),
+                    hovertemplate="%{x|%Y-%m-%d}<br>去年同期：%{y:,.2f} 万元<extra></extra>"
+                )
+
     fig_trend.update_layout(
         xaxis_title="日期",
         yaxis_title="金额（万元）",
