@@ -212,13 +212,12 @@ if date_list:
         if "user_manually_selected_date" not in st.session_state:
             st.session_state["user_manually_selected_date"] = False
         
-        # 计算默认日期范围：最近10天（每次都重新计算，确保数据更新后能显示最新日期）
-        if len(valid_dates) > 10:
-            default_start_date = valid_dates[-10][1].date()
-            default_end_date = valid_dates[-1][1].date()
-        else:
+        # 计算默认日期范围：起始日固定为10月10日，结束日为数据中的最新日期
+        # （每次都重新计算，确保数据更新后能显示最新日期；若数据起始晚于10月10日则回退为数据起始日）
+        default_start_date = pd.to_datetime("2026-10-10").date()
+        if default_start_date < min_date:
             default_start_date = min_date
-            default_end_date = max_date
+        default_end_date = max_date
         
         # 初始化日期范围选择器的默认值（只在第一次加载时设置）
         if "date_range_selector" not in st.session_state:
@@ -270,9 +269,13 @@ if date_list:
 else:
     selected_dates = []
 
-dept_list = sorted([d for d in df_all["部门"].unique() if d])
+# 隐藏「八喜」部门选项：从部门列表中剔除，radio 与「全部」均不再包含八喜
+dept_list = sorted([d for d in df_all["部门"].unique() if d and d != "八喜"])
 dept_options = ["全部"] + dept_list
 if "selected_dept_radio" not in st.session_state:
+    st.session_state["selected_dept_radio"] = "全部"
+# 兜底：若历史会话中保存的是已隐藏的「八喜」，重置为「全部」
+if st.session_state["selected_dept_radio"] not in dept_options:
     st.session_state["selected_dept_radio"] = "全部"
 selected_dept_radio = st.sidebar.radio("部门", dept_options, key="selected_dept_radio")
 selected_dept = dept_list if selected_dept_radio == "全部" else [selected_dept_radio]
@@ -462,6 +465,30 @@ else:
 total_goal = df_filtered["目标金额"].sum()
 achievement_rate = (total_amount / total_goal * 100) if total_goal > 0 else 0
 
+# 双11时间进度：时间范围 10月10日 至 11月11日（含首尾，共33天）
+# "当前时间"不取系统时钟，而取数据中最新日期（与页面"数据最后日期"同口径）
+promo_start_date = pd.Timestamp("2026-10-10").date()
+promo_end_date = pd.Timestamp("2026-11-11").date()
+total_days = (promo_end_date - promo_start_date).days + 1  # 含首尾：33天
+_latest_parsed = pd.to_datetime(df_all["日期"].astype(str).str.strip(), errors="coerce")
+_current_date = _latest_parsed.max().date() if pd.notna(_latest_parsed.max()) else promo_start_date
+elapsed_days = (_current_date - promo_start_date).days + 1  # 含10/10当天，如10/11为2天
+elapsed_days = min(max(elapsed_days, 0), total_days)
+time_progress = elapsed_days / total_days * 100.0
+
+# 双11总目标（万元）：按部门选择取对应目标；「全部」为三个部门目标之和
+double11_goals = {
+    "低温": 5090.0,
+    "常温": 6148.0,
+    "奶粉": 837.0,
+}
+if selected_dept_radio == "全部":
+    double11_goal = sum(double11_goals.values())  # 5090+6148+837=12075
+else:
+    double11_goal = double11_goals.get(selected_dept_radio, 0.0)
+# 分子与「成交金额合计（万元）」卡片展示的 total_amount 完全一致
+goal_progress = (total_amount / double11_goal * 100.0) if double11_goal > 0 else 0.0
+
 metric_html = """
 <style>
     .custom-metric-row {
@@ -477,6 +504,10 @@ metric_html = """
     }
     .metric-label { font-size: 14px; color: #666; margin-bottom: 8px; }
     .metric-value { font-size: 24px; font-weight: bold; color: #333; }
+    .metric-sub { font-size: 12px; color: #999; margin-top: 6px; }
+    .progress-bar { background: #eee; border-radius: 4px; height: 8px; margin-top: 10px; overflow: hidden; }
+    .progress-fill { background: #ff4d4f; height: 100%; border-radius: 4px; }
+    .progress-fill-goal { background: #52c41a; height: 100%; border-radius: 4px; }
 </style>
 """
 st.markdown(metric_html, unsafe_allow_html=True)
@@ -486,6 +517,16 @@ st.markdown(
     f"<div class='custom-metric-row'>"
     f"<div class='custom-metric'><div class='metric-label'>💰 成交金额合计（万元）</div>"
     f"<div class='metric-value'>{total_amount:,.2f}</div></div>"
+    f"<div class='custom-metric'><div class='metric-label'>⏰ 双11时间进度</div>"
+    f"<div class='metric-value'>{time_progress:.1f}%</div>"
+    f"<div class='progress-bar'><div class='progress-fill' style='width:{time_progress:.1f}%'></div></div>"
+    f"<div class='metric-sub'>已过 {elapsed_days} 天 / 共 {total_days} 天（截至 {_current_date.month}/{_current_date.day}）</div>"
+    f"</div>"
+    f"<div class='custom-metric'><div class='metric-label'>🎯 双11总目标完成进度</div>"
+    f"<div class='metric-value'>{goal_progress:.1f}%</div>"
+    f"<div class='progress-bar'><div class='progress-fill-goal' style='width:{goal_progress:.1f}%'></div></div>"
+    f"<div class='metric-sub'>已完成 {total_amount:,.0f} 万 / 目标 {double11_goal:,.0f} 万</div>"
+    f"</div>"
     f"</div>",
     unsafe_allow_html=True,
 )
