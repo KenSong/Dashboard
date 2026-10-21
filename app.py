@@ -435,16 +435,16 @@ st.markdown(
 )
 st.markdown("---")
 
-# 计算成交金额合计
+# 计算成交金额合计（同时记录金额口径范围 df_amount_scope，供同比按月-日匹配）
 is_618_mode = st.session_state.get("is_618_mode", False)
 user_manually_selected = st.session_state.get("user_manually_selected_date", False)
 
 if is_618_mode:
     # 618模式，计算5/13-6/20范围内的成交金额
-    total_amount = df_filtered["成交金额"].sum()
+    df_amount_scope = df_filtered
 elif user_manually_selected:
     # 非618模式，用户手动选择了日期范围，计算该范围内的成交金额
-    total_amount = df_filtered["成交金额"].sum()
+    df_amount_scope = df_filtered
 else:
     # 非618模式，用户没有手动选择日期范围，计算最近10天的成交金额
     df_dates = df_filtered.assign(
@@ -457,10 +457,11 @@ else:
         if len(recent_dates) > 10:
             recent_dates = sorted(recent_dates)[-10:]
         # 筛选最近10天的数据
-        df_recent = df_dates[df_dates["_日期解析"].dt.date.isin(recent_dates)]
-        total_amount = df_recent["成交金额"].sum()
+        df_amount_scope = df_dates[df_dates["_日期解析"].dt.date.isin(recent_dates)]
     else:
-        total_amount = df_filtered["成交金额"].sum()
+        df_amount_scope = df_filtered
+
+total_amount = df_amount_scope["成交金额"].sum()
 
 total_goal = df_filtered["目标金额"].sum()
 achievement_rate = (total_amount / total_goal * 100) if total_goal > 0 else 0
@@ -488,6 +489,36 @@ else:
     double11_goal = double11_goals.get(selected_dept_radio, 0.0)
 # 分子与「成交金额合计（万元）」卡片展示的 total_amount 完全一致
 goal_progress = (total_amount / double11_goal * 100.0) if double11_goal > 0 else 0.0
+
+# 同比增长：本期金额与去年同期（result_2025.csv，按月-日匹配，同部门/平台筛选）对比
+yoy_growth = None
+last_year_amount = 0.0
+if RESULT_2025_CSV.is_file():
+    _df_2025 = load_result_2025_csv(str(RESULT_2025_CSV), RESULT_2025_CSV.stat().st_mtime)
+    if not _df_2025.empty:
+        _f25 = _df_2025.copy()
+        if selected_dept:
+            _f25 = _f25[_f25["部门"].isin(selected_dept)]
+        if selected_plat:
+            _f25 = _f25[_f25["平台"].isin(selected_plat)]
+        # 本期金额口径内的月-日集合
+        _scope_dates = pd.to_datetime(
+            df_amount_scope["日期"].astype(str).str.strip(), errors="coerce"
+        ).dropna()
+        _scope_month_days = set(_scope_dates.dt.strftime("%m-%d"))
+        last_year_amount = _f25[_f25["_月日"].isin(_scope_month_days)]["成交金额"].sum()
+        if last_year_amount > 0:
+            yoy_growth = (total_amount - last_year_amount) / last_year_amount * 100.0
+
+# 同比展示文本：负数由 f-string 自动带负号，正数不带加号；无同期数据显示 —
+yoy_value_text = f"{yoy_growth:.1f}%" if yoy_growth is not None else "—"
+# 正负值配色：正红负绿（国内习惯）
+if yoy_growth is None:
+    yoy_value_style = "color:#333"
+elif yoy_growth >= 0:
+    yoy_value_style = "color:#f5222d"
+else:
+    yoy_value_style = "color:#52c41a"
 
 metric_html = """
 <style>
@@ -526,6 +557,10 @@ st.markdown(
     f"<div class='metric-value'>{goal_progress:.1f}%</div>"
     f"<div class='progress-bar'><div class='progress-fill-goal' style='width:{goal_progress:.1f}%'></div></div>"
     f"<div class='metric-sub'>已完成 {total_amount:,.0f} 万 / 目标 {double11_goal:,.0f} 万</div>"
+    f"</div>"
+    f"<div class='custom-metric'><div class='metric-label'>📈 同比增长</div>"
+    f"<div class='metric-value' style='{yoy_value_style}'>{yoy_value_text}</div>"
+    f"<div class='metric-sub'>本期 {total_amount:,.0f} 万 / 去年 {last_year_amount:,.0f} 万</div>"
     f"</div>"
     f"</div>",
     unsafe_allow_html=True,
