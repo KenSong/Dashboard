@@ -562,15 +562,6 @@ if not _trend.empty:
     # 只显示有数据的日期，不生成连续日期序列
     trend_sum_full = trend_sum.sort_values("_日期")
     
-    # 检查是否在618模式
-    is_618_mode = st.session_state.get("is_618_mode", False)
-    # 检查用户是否手动选择了日期范围
-    user_manually_selected = st.session_state.get("user_manually_selected_date", False)
-    
-    # 非618模式下，如果用户没有手动选择日期范围，默认只显示最近10天的数据
-    if not is_618_mode and not user_manually_selected and len(trend_sum_full) > 10:
-        trend_sum_full = trend_sum_full.tail(10)
-    
     # 判断当前筛选范围内是否有目标金额数据
     _has_goal = trend_sum_full["目标金额"].sum() > 0
     if _has_goal:
