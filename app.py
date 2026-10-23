@@ -435,31 +435,8 @@ st.markdown(
 )
 st.markdown("---")
 
-# 计算成交金额合计（同时记录金额口径范围 df_amount_scope，供同比按月-日匹配）
-is_618_mode = st.session_state.get("is_618_mode", False)
-user_manually_selected = st.session_state.get("user_manually_selected_date", False)
-
-if is_618_mode:
-    # 618模式，计算5/13-6/20范围内的成交金额
-    df_amount_scope = df_filtered
-elif user_manually_selected:
-    # 非618模式，用户手动选择了日期范围，计算该范围内的成交金额
-    df_amount_scope = df_filtered
-else:
-    # 非618模式，用户没有手动选择日期范围，计算最近10天的成交金额
-    df_dates = df_filtered.assign(
-        _日期解析=pd.to_datetime(df_filtered["日期"].astype(str).str.strip(), errors="coerce")
-    ).dropna(subset=["_日期解析"])
-    
-    if not df_dates.empty:
-        # 获取最近10天的日期
-        recent_dates = df_dates["_日期解析"].dt.date.unique()
-        if len(recent_dates) > 10:
-            recent_dates = sorted(recent_dates)[-10:]
-        # 筛选最近10天的数据
-        df_amount_scope = df_dates[df_dates["_日期解析"].dt.date.isin(recent_dates)]
-    else:
-        df_amount_scope = df_filtered
+# 计算成交金额合计（口径与「部门 × 平台 汇总」一致：当前筛选范围全部日期）
+df_amount_scope = df_filtered
 
 total_amount = df_amount_scope["成交金额"].sum()
 
